@@ -35,16 +35,20 @@ class ReportController extends Controller
             $start  = now()->subMonths($months - 1)->startOfMonth();
         }
 
-        // Query agregasi per bulan via GROUP BY
+        // Query agregasi per bulan — kompatibel SQLite (dev) & PostgreSQL (prod)
+        $driver = \Illuminate\Support\Facades\DB::getDriverName();
+
+        if ($driver === 'sqlite') {
+            $monthExpr = "strftime('%Y-%m', transaction_date)";
+        } else {
+            $monthExpr = "TO_CHAR(transaction_date, 'YYYY-MM')";
+        }
+
         $rows = Transaction::where('user_id', $user->id)
             ->whereBetween('transaction_date', [$start->toDateString(), $end->toDateString()])
-            ->selectRaw("
-                TO_CHAR(transaction_date, 'YYYY-MM') AS month,
-                type,
-                SUM(amount) AS total
-            ")
-            ->groupByRaw("TO_CHAR(transaction_date, 'YYYY-MM'), type")
-            ->orderByRaw("TO_CHAR(transaction_date, 'YYYY-MM') ASC")
+            ->selectRaw("{$monthExpr} AS month, type, SUM(amount) AS total")
+            ->groupByRaw("{$monthExpr}, type")
+            ->orderByRaw("{$monthExpr} ASC")
             ->get();
 
         // Transformasi ke format { month, income, expense, savings }

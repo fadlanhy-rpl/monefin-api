@@ -87,13 +87,19 @@ class TransactionController extends Controller
             'transaction_date' => ['sometimes', 'date'],
         ]);
 
+        // Simpan data lama sebelum di-update
+        $oldAccountId = $transaction->account_id;
+        $oldType      = $transaction->type;
+        $oldAmount    = (float) $transaction->amount;
+
         // Balikkan efek saldo lama
-        $this->reverseAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
+        $this->reverseAccountBalance($oldAccountId, $oldType, $oldAmount);
 
         $transaction->update($validated);
+        $transaction->refresh();
 
-        // Terapkan efek saldo baru
-        $this->updateAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
+        // Terapkan efek saldo baru (gunakan data terbaru setelah update)
+        $this->updateAccountBalance($transaction->account_id, $transaction->type, (float) $transaction->amount);
 
         // Rekam ulang analisis spending
         $this->spending->recordNotification($request->user());

@@ -101,12 +101,12 @@ class SpendingAnalysisService
         $now = Carbon::now();
 
         if ($setting->period_type === 'weekly') {
-            $startDate   = $now->startOfWeek()->toDateString();
+            $startDate   = $now->copy()->startOfWeek()->toDateString();
             $endDate     = $now->copy()->endOfWeek()->toDateString();
             $periodLabel = $now->format('Y-\WW');
         } else {
             // monthly
-            $startDate   = $now->startOfMonth()->toDateString();
+            $startDate   = $now->copy()->startOfMonth()->toDateString();
             $endDate     = $now->copy()->endOfMonth()->toDateString();
             $periodLabel = $now->format('Y-m');
         }
