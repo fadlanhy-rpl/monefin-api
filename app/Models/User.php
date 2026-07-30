@@ -17,6 +17,10 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'photo',
+        'google_id',
+        'provider',
+        'email_verified_at',
     ];
 
     protected $hidden = [
@@ -24,13 +28,26 @@ class User extends Authenticatable
         'remember_token',
     ];
 
+    // Append computed attribute
+    protected $appends = ['has_password'];
+
+    /**
+     * Apakah user sudah memiliki password (false untuk user Google yang belum set password).
+     */
+    public function getHasPasswordAttribute(): bool
+    {
+        return !is_null($this->password);
+    }
+
     protected function casts(): array
     {
         return [
             'email_verified_at' => 'datetime',
-            'password' => 'hashed',
+            'password'          => 'hashed',
         ];
     }
+
+    // ─── Relationships ──────────────────────────────────────
 
     public function accounts(): HasMany
     {
