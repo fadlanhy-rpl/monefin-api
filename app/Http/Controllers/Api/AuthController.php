@@ -92,17 +92,40 @@ class AuthController extends Controller
     {
         $request->validate([
             'name'     => ['required', 'string', 'max:255'],
-            'email'    => 'required|email|max:255|unique:users',
+            'email'    => 'required|email|max:255',
             'password' => 'required|min:6',
         ]);
 
-        $user = User::create([
-            'name'     => strip_tags($request->name),
-            'email'    => $request->email,
-            'password' => Hash::make($request->password),
-        ]);
+        $existingUser = User::where('email', $request->email)->first();
 
-        // Generate & Kirim OTP verifikasi
+        if ($existingUser) {
+            // Jika user sudah terdaftar DAN sudah diverifikasi → tolak
+            if ($existingUser->email_verified_at) {
+                return response()->json([
+                    'message' => 'Email ini sudah terdaftar dan diverifikasi. Silakan login.',
+                    'errors'  => ['email' => ['Email ini sudah terdaftar dan diverifikasi. Silakan login.']],
+                ], 422);
+            }
+
+            // Jika user sudah terdaftar tapi BELUM diverifikasi → perbarui data & buat OTP baru
+            $existingUser->update([
+                'name'     => strip_tags($request->name),
+                'password' => Hash::make($request->password),
+            ]);
+            $user = $existingUser;
+        } else {
+            // User baru
+            $user = User::create([
+                'name'     => strip_tags($request->name),
+                'email'    => $request->email,
+                'password' => Hash::make($request->password),
+            ]);
+        }
+
+        // Hapus OTP verifikasi lama untuk email ini
+        OtpCode::where('email', $user->email)->where('type', 'verification')->delete();
+
+        // Generate & Kirim OTP verifikasi baru
         $otp = rand(100000, 999999);
         OtpCode::create([
             'email'      => $user->email,
@@ -164,7 +187,14 @@ class AuthController extends Controller
      */
     public function redirectToGoogle()
     {
-        return Socialite::driver('google')->stateless()->redirect();
+        /** @var \Laravel\Socialite\Two\AbstractProvider $driver */
+        $driver = Socialite::driver('google');
+
+        if (app()->environment('local')) {
+            $driver->setHttpClient(new \GuzzleHttp\Client(['verify' => false]));
+        }
+
+        return $driver->stateless()->redirect();
     }
 
     /**
@@ -174,7 +204,14 @@ class AuthController extends Controller
     public function handleGoogleCallback()
     {
         try {
-            $googleUser = Socialite::driver('google')->stateless()->user();
+            /** @var \Laravel\Socialite\Two\AbstractProvider $driver */
+            $driver = Socialite::driver('google');
+
+            if (app()->environment('local')) {
+                $driver->setHttpClient(new \GuzzleHttp\Client(['verify' => false]));
+            }
+
+            $googleUser = $driver->stateless()->user();
 
             $user = User::where('email', $googleUser->getEmail())->first();
 
