@@ -15,7 +15,8 @@ class CategoryController extends Controller
      */
     public function index(Request $request): AnonymousResourceCollection
     {
-        $categories = Category::where(function ($query) use ($request) {
+        $categories = Category::withCount('transactions')
+        ->where(function ($query) use ($request) {
             $query->whereNull('user_id')
                   ->orWhere('user_id', $request->user()->id);
         })
@@ -36,6 +37,8 @@ class CategoryController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'type' => ['required', 'in:income,expense'],
             'icon' => ['nullable', 'string', 'max:100'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'color' => ['nullable', 'string', 'max:20'],
         ]);
 
         $category = $request->user()->categories()->create($validated);
@@ -57,6 +60,8 @@ class CategoryController extends Controller
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'type' => ['sometimes', 'required', 'in:income,expense'],
             'icon' => ['nullable', 'string', 'max:100'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'color' => ['nullable', 'string', 'max:20'],
         ]);
 
         $category->update($validated);
