@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user',    [AuthController::class, 'me']);
 
     // Accounts
+    Route::put('accounts/reorder', [AccountController::class, 'reorder']);
     Route::apiResource('accounts', AccountController::class);
     Route::post('accounts/{account}/adjust-balance', [AccountController::class, 'adjustBalance']);
 
