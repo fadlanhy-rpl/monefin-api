@@ -17,6 +17,10 @@ class Account extends Model
         'name',
         'type',
         'balance',
+        'account_number',
+        'account_holder',
+        'color_theme',
+        'sort_order',
     ];
 
     protected $casts = [

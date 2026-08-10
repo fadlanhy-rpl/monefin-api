@@ -15,14 +15,17 @@ class AccountResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'         => $this->id,
-            'user_id'    => $this->user_id,
-            'name'       => $this->name,
-            'type'       => $this->type,
-            'balance'    => $this->balance,
-            'deleted_at' => $this->deleted_at,
-            'created_at' => $this->created_at,
-            'updated_at' => $this->updated_at,
+            'id'             => $this->id,
+            'user_id'        => $this->user_id,
+            'name'           => $this->name,
+            'type'           => $this->type,
+            'balance'        => $this->balance,
+            'account_number' => $this->account_number,
+            'account_holder' => $this->account_holder,
+            'color_theme'    => $this->color_theme,
+            'deleted_at'     => $this->deleted_at,
+            'created_at'     => $this->created_at,
+            'updated_at'     => $this->updated_at,
         ];
     }
 }

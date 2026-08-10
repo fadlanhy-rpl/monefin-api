@@ -16,6 +16,7 @@ class AccountController extends Controller
         $accounts = $request->user()
             ->accounts()
             ->withTrashed()
+            ->orderBy('sort_order', 'asc')
             ->latest()
             ->get();
 
@@ -25,9 +26,12 @@ class AccountController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name'    => ['required', 'string', 'max:255'],
-            'type'    => ['required', 'in:cash,bank,ewallet'],
-            'balance' => ['nullable', 'numeric', 'min:0'],
+            'name'           => ['required', 'string', 'max:255'],
+            'type'           => ['required', 'in:cash,bank,ewallet'],
+            'balance'        => ['nullable', 'numeric', 'min:0'],
+            'account_number' => ['nullable', 'string', 'max:255'],
+            'account_holder' => ['nullable', 'string', 'max:255'],
+            'color_theme'    => ['nullable', 'string', 'max:50'],
         ]);
 
         $account = $request->user()->accounts()->create($validated);
@@ -50,9 +54,12 @@ class AccountController extends Controller
         $this->authorizeAccount($request, $account);
 
         $validated = $request->validate([
-            'name'    => ['sometimes', 'required', 'string', 'max:255'],
-            'type'    => ['sometimes', 'required', 'in:cash,bank,ewallet'],
-            'balance' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'name'           => ['sometimes', 'required', 'string', 'max:255'],
+            'type'           => ['sometimes', 'required', 'in:cash,bank,ewallet'],
+            'balance'        => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'account_number' => ['nullable', 'string', 'max:255'],
+            'account_holder' => ['nullable', 'string', 'max:255'],
+            'color_theme'    => ['nullable', 'string', 'max:50'],
         ]);
 
         $account->update($validated);
@@ -78,6 +85,26 @@ class AccountController extends Controller
         $account->forceDelete();
 
         return response()->json(['message' => 'Akun berhasil dihapus.']);
+    }
+
+    /**
+     * Memperbarui urutan akun secara massal
+     */
+    public function reorder(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'accounts' => ['required', 'array'],
+            'accounts.*.id' => ['required', 'integer', 'exists:accounts,id'],
+            'accounts.*.sort_order' => ['required', 'integer'],
+        ]);
+
+        foreach ($validated['accounts'] as $item) {
+            Account::where('id', $item['id'])
+                ->where('user_id', $request->user()->id)
+                ->update(['sort_order' => $item['sort_order']]);
+        }
+
+        return response()->json(['message' => 'Urutan akun berhasil diperbarui.']);
     }
 
     /**
