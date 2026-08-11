@@ -12,7 +12,7 @@ class GoalController extends Controller
 {
     public function index(Request $request): AnonymousResourceCollection
     {
-        $goals = $request->user()->goals()->latest()->get();
+        $goals = $request->user()->goals()->orderByDesc('is_pinned')->latest()->get();
 
         return GoalResource::collection($goals);
     }
@@ -21,9 +21,14 @@ class GoalController extends Controller
     {
         $validated = $request->validate([
             'name'           => ['required', 'string', 'max:255'],
+            'description'    => ['nullable', 'string', 'max:500'],
+            'color'          => ['nullable', 'string', 'max:20'],
+            'icon'           => ['nullable', 'string', 'max:50'],
+            'layout_type'    => ['nullable', 'string', 'max:20'],
+            'is_pinned'      => ['nullable', 'boolean'],
             'target_amount'  => ['required', 'numeric', 'min:0.01'],
             'current_amount' => ['nullable', 'numeric', 'min:0'],
-            'deadline'       => ['nullable', 'date', 'after:today'],
+            'deadline'       => ['nullable', 'date', 'after_or_equal:today'],
         ]);
 
         $goal = $request->user()->goals()->create($validated);
@@ -47,6 +52,11 @@ class GoalController extends Controller
 
         $validated = $request->validate([
             'name'           => ['sometimes', 'required', 'string', 'max:255'],
+            'description'    => ['nullable', 'string', 'max:500'],
+            'color'          => ['nullable', 'string', 'max:20'],
+            'icon'           => ['nullable', 'string', 'max:50'],
+            'layout_type'    => ['nullable', 'string', 'max:20'],
+            'is_pinned'      => ['nullable', 'boolean'],
             'target_amount'  => ['sometimes', 'numeric', 'min:0.01'],
             'current_amount' => ['sometimes', 'numeric', 'min:0'],
             'deadline'       => ['nullable', 'date'],

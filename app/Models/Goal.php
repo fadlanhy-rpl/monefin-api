@@ -14,6 +14,11 @@ class Goal extends Model
     protected $fillable = [
         'user_id',
         'name',
+        'description',
+        'color',
+        'icon',
+        'layout_type',
+        'is_pinned',
         'target_amount',
         'current_amount',
         'deadline',
@@ -22,7 +27,8 @@ class Goal extends Model
     protected $casts = [
         'target_amount' => 'decimal:2',
         'current_amount' => 'decimal:2',
-        'deadline' => 'date',
+        'is_pinned'     => 'boolean',
+        'deadline'       => 'date',
     ];
 
     public function user(): BelongsTo
