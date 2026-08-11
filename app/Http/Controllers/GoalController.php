@@ -55,12 +55,16 @@ class GoalController extends Controller
             ], 422);
         }
 
-        DB::transaction(function () use ($request, $account, $goal, $actualDeposit) {
+        $category = $request->user()->categories()->where('type', 'expense')->first();
+        $categoryId = $category?->id;
+
+        DB::transaction(function () use ($request, $account, $goal, $actualDeposit, $categoryId) {
             $account->decrement('balance', $actualDeposit);
             $goal->increment('current_amount', $actualDeposit);
 
             $request->user()->transactions()->create([
                 'account_id'       => $account->id,
+                'category_id'      => $categoryId,
                 'goal_id'          => $goal->id,
                 'type'             => 'expense',
                 'amount'           => $actualDeposit,
@@ -103,12 +107,16 @@ class GoalController extends Controller
             ], 422);
         }
 
-        DB::transaction(function () use ($request, $account, $goal, $amount) {
+        $category = $request->user()->categories()->where('type', 'income')->first();
+        $categoryId = $category?->id;
+
+        DB::transaction(function () use ($request, $account, $goal, $amount, $categoryId) {
             $goal->decrement('current_amount', $amount);
             $account->increment('balance', $amount);
 
             $request->user()->transactions()->create([
                 'account_id'       => $account->id,
+                'category_id'      => $categoryId,
                 'goal_id'          => $goal->id,
                 'type'             => 'income',
                 'amount'           => $amount,
