@@ -31,30 +31,57 @@ class GoalController extends Controller
 
         $account = $request->user()->accounts()->findOrFail($validated['account_id']);
         $amount = (float) $validated['amount'];
+        $target = (float) $goal->target_amount;
+        $current = (float) $goal->current_amount;
+        $remaining = max(0, $target - $current);
 
-        if ((float) $account->balance < $amount) {
+        if ($remaining <= 0) {
+            return response()->json([
+                'message' => 'Target tabungan ini sudah tercapai sepenuhnya (100%). Tidak perlu menambah setoran lagi!'
+            ], 422);
+        }
+
+        $wasCapped = false;
+        $actualDeposit = $amount;
+
+        if ($amount > $remaining) {
+            $wasCapped = true;
+            $actualDeposit = $remaining;
+        }
+
+        if ((float) $account->balance < $actualDeposit) {
             return response()->json([
                 'message' => 'Saldo akun tidak mencukupi untuk melakukan deposit tabungan.'
             ], 422);
         }
 
-        DB::transaction(function () use ($request, $account, $goal, $amount) {
-            $account->decrement('balance', $amount);
-            $goal->increment('current_amount', $amount);
+        DB::transaction(function () use ($request, $account, $goal, $actualDeposit) {
+            $account->decrement('balance', $actualDeposit);
+            $goal->increment('current_amount', $actualDeposit);
 
             $request->user()->transactions()->create([
                 'account_id'       => $account->id,
                 'goal_id'          => $goal->id,
                 'type'             => 'expense',
-                'amount'           => $amount,
+                'amount'           => $actualDeposit,
                 'description'      => "Setor Tabungan: {$goal->name}",
                 'transaction_date' => now()->toDateString(),
             ]);
         });
 
+        $formattedInput = 'Rp ' . number_format($amount, 0, ',', '.');
+        $formattedActual = 'Rp ' . number_format($actualDeposit, 0, ',', '.');
+
+        if ($wasCapped) {
+            $message = "Setoran {$formattedInput} disesuaikan menjadi {$formattedActual} karena target tabungan '{$goal->name}' telah tercapai 100%! 🎉";
+        } else {
+            $message = "Berhasil menyetor {$formattedActual} ke target tabungan '{$goal->name}'!";
+        }
+
         return response()->json([
-            'message' => 'Berhasil menyetor dana ke target tabungan!',
-            'data'    => new GoalResource($goal->fresh()),
+            'message'    => $message,
+            'was_capped' => $wasCapped,
+            'data'       => new GoalResource($goal->fresh()),
         ]);
     }
 
