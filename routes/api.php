@@ -62,6 +62,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('budgets', BudgetController::class);
 
     // Goals
+    Route::post('goals/{goal}/deposit',  [GoalController::class, 'deposit']);
+    Route::post('goals/{goal}/withdraw', [GoalController::class, 'withdraw']);
     Route::apiResource('goals', GoalController::class);
 
     // Income Settings
