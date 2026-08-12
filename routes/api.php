@@ -83,6 +83,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
 
     // Reports
-    Route::get('/reports/compare', [ReportController::class, 'compare']);
-    Route::get('/reports/export',  [ReportController::class, 'export']);
+    Route::get('/reports/compare',            [ReportController::class, 'compare']);
+    Route::get('/reports/export',             [ReportController::class, 'export']);
+    Route::get('/reports/category-breakdown', [ReportController::class, 'categoryBreakdown']);
 });
