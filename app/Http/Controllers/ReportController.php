@@ -133,11 +133,9 @@ class ReportController extends Controller
 
     /**
      * GET /api/reports/export
-     * Export laporan keuangan ke CSV profesional bergaya data analyst / akuntan.
-     *
-     * Query params: start_date, end_date, type, category_id, account_id
+     * Export laporan keuangan ke Excel (.xlsx) profesional — 4 Sheet.
      */
-    public function export(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function export(Request $request): \Illuminate\Http\Response
     {
         $user = $request->user();
 
@@ -148,10 +146,10 @@ class ReportController extends Controller
             ->when($request->type,        fn ($q) => $q->where('type', $request->type))
             ->when($request->category_id, fn ($q) => $q->where('category_id', $request->category_id))
             ->when($request->account_id,  fn ($q) => $q->where('account_id', $request->account_id))
-            ->orderBy('transaction_date', 'desc')
-            ->orderBy('created_at', 'desc')
+            ->orderBy('transaction_date', 'desc')->orderBy('created_at', 'desc')
             ->get();
 
+        // KPIs
         $incTx        = $transactions->where('type', 'income');
         $expTx        = $transactions->where('type', 'expense');
         $totalIncome  = (float) $incTx->sum('amount');
@@ -166,21 +164,18 @@ class ReportController extends Controller
         $avgExpense   = $expenseCount > 0 ? $totalExpense / $expenseCount : 0;
         $maxExpense   = (float) ($expTx->max('amount') ?? 0);
         $maxIncome    = (float) ($incTx->max('amount') ?? 0);
-        $minExpense   = (float) ($expTx->min('amount') ?? 0);
-        $healthScore  = $savingRate >= 30 ? 'A (Sangat Sehat)' : ($savingRate >= 20 ? 'B (Sehat)' : ($savingRate >= 10 ? 'C (Cukup)' : 'D (Perlu Perhatian)'));
+        $healthScore  = $savingRate >= 30 ? 'A - Sangat Sehat' : ($savingRate >= 20 ? 'B - Sehat' : ($savingRate >= 10 ? 'C - Cukup' : 'D - Perlu Perhatian'));
+        $healthColor  = $savingRate >= 30 ? '00685F' : ($savingRate >= 20 ? '059669' : ($savingRate >= 10 ? 'd97706' : 'dc2626'));
 
-        $driver = \Illuminate\Support\Facades\DB::getDriverName();
-        $monthExpr = $driver === 'sqlite'
-            ? "strftime('%Y-%m', transaction_date)"
-            : "TO_CHAR(transaction_date, 'YYYY-MM')";
+        // Monthly trendline
+        $driver    = \Illuminate\Support\Facades\DB::getDriverName();
+        $monthExpr = $driver === 'sqlite' ? "strftime('%Y-%m', transaction_date)" : "TO_CHAR(transaction_date, 'YYYY-MM')";
 
         $monthlyRows = Transaction::where('user_id', $user->id)
             ->when($request->start_date, fn ($q) => $q->where('transaction_date', '>=', $request->start_date))
             ->when($request->end_date,   fn ($q) => $q->where('transaction_date', '<=', $request->end_date))
             ->selectRaw("{$monthExpr} AS month, type, SUM(amount) AS total")
-            ->groupByRaw("{$monthExpr}, type")
-            ->orderByRaw("{$monthExpr} ASC")
-            ->get();
+            ->groupByRaw("{$monthExpr}, type")->orderByRaw("{$monthExpr} ASC")->get();
 
         $monthly = [];
         foreach ($monthlyRows as $r) {
@@ -196,144 +191,376 @@ class ReportController extends Controller
         $surplusMonths = $monthly->where('net', '>=', 0)->count();
         $deficitMonths = $monthly->where('net', '<',  0)->count();
         $bestMonth     = $monthly->sortByDesc('net')->first();
-        $worstMonth    = $monthly->sortBy('net')->first();
 
+        // Category breakdown
         $grandAll      = (float) $transactions->sum('amount');
         $categoryStats = $transactions
-            ->groupBy(fn ($t) => ($t->category?->name ?? 'Lain-lain') . '|' . $t->type)
+            ->groupBy(fn ($t) => ($t->category?->name ?? 'Lain-lain') . '|||' . $t->type)
             ->map(fn ($group, $key) => [
-                'name'  => explode('|', $key)[0],
-                'type'  => explode('|', $key)[1],
+                'name'  => explode('|||', $key)[0],
+                'type'  => explode('|||', $key)[1],
                 'count' => $group->count(),
                 'total' => (float) $group->sum('amount'),
                 'avg'   => round((float) $group->sum('amount') / $group->count(), 0),
-            ])
-            ->sortByDesc('total')
-            ->values();
-
-        $top5Expenses = $expTx->sortByDesc('amount')->take(5)->values();
+            ])->sortByDesc('total')->values();
 
         $periodLabel = ($request->start_date && $request->end_date)
-            ? "{$request->start_date} s/d {$request->end_date}"
-            : 'Semua Periode';
+            ? $request->start_date . ' s/d ' . $request->end_date : 'Semua Periode';
+
+        // Brand palette
+        $C_DARK  = '1e293b';
+        $C_GREEN = '00685F';
+        $C_LGRE  = 'E6F0EF';
+        $C_RED   = 'dc2626';
+        $C_LRED  = 'FEF2F2';
+        $C_AMB   = 'd97706';
+        $C_LAMB  = 'FFFBEB';
+        $C_SLATE = '475569';
+        $C_BGALT = 'F8FAFC';
+        $C_WHITE = 'FFFFFF';
+        $C_BDR   = 'CBD5E1';
 
         $rp = fn ($v) => 'Rp ' . number_format((float) $v, 0, ',', '.');
 
-        $filename = 'MoneFin_LaporanKeuangan_' . now()->format('Ymd_His') . '.csv';
+        $applyHdr = function ($ws, $col, $row, $txt, $fgColor, $bgColor, $sz = 9) {
+            $cell = $ws->getCell($col . $row);
+            $cell->setValue($txt);
+            $cell->getStyle()->getFont()->setBold(true)->setSize($sz)->getColor()->setRGB($fgColor);
+            $cell->getStyle()->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                 ->getStartColor()->setRGB($bgColor);
+            $cell->getStyle()->getAlignment()
+                 ->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)
+                 ->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+        };
 
-        return response()->streamDownload(function () use (
-            $transactions, $categoryStats, $monthly, $top5Expenses,
-            $totalIncome, $totalExpense, $netCashflow, $savingRate, $burnRate,
-            $txCount, $incomeCount, $expenseCount, $avgIncome, $avgExpense,
-            $maxIncome, $maxExpense, $minExpense, $healthScore,
-            $surplusMonths, $deficitMonths, $bestMonth, $worstMonth,
-            $grandAll, $periodLabel, $rp
-        ) {
-            $handle = fopen('php://output', 'w');
-            fwrite($handle, "\xEF\xBB\xBF");
+        $setOutline = function ($ws, $range, $color) {
+            $ws->getStyle($range)->getBorders()->getOutline()
+               ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_MEDIUM)->getColor()->setRGB($color);
+        };
+        $setAllBorders = function ($ws, $range, $color) {
+            $ws->getStyle($range)->getBorders()->getAllBorders()
+               ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN)->getColor()->setRGB($color);
+        };
+        $fillBg = function ($ws, $range, $color) {
+            $ws->getStyle($range)->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+               ->getStartColor()->setRGB($color);
+        };
+        $setBanner = function ($ws, $row, $cols, $txt, $fgColor, $bgColor, $h, $sz = 9) {
+            $ws->mergeCells("A{$row}:{$cols}{$row}");
+            $ws->getCell("A{$row}")->setValue($txt);
+            $ws->getRowDimension($row)->setRowHeight($h);
+            $ws->getStyle("A{$row}")->getFont()->setSize($sz)->getColor()->setRGB($fgColor);
+            $ws->getStyle("A{$row}")->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)->getStartColor()->setRGB($bgColor);
+            $ws->getStyle("A{$row}")->getAlignment()->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+        };
 
-            $sep = fn () => fputcsv($handle, []);
+        // BUILD WORKBOOK
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $spreadsheet->getProperties()->setCreator('MoneFin')->setTitle('Laporan Keuangan Personal')->setSubject($periodLabel);
 
-            // COVER
-            fputcsv($handle, ['LAPORAN KEUANGAN PERSONAL', 'MoneFin Financial Analytics v2.0']);
-            fputcsv($handle, ['Dibuat Pada', now()->format('d F Y, H:i') . ' WIB']);
-            fputcsv($handle, ['Periode', $periodLabel]);
-            fputcsv($handle, ['Catatan', 'Dokumen rahasia. Hanya untuk penggunaan pribadi.']);
-            $sep();
+        // ─── SHEET 1: DASHBOARD KPI ───────────────────────────────────────────
+        $ws1 = $spreadsheet->getActiveSheet()->setTitle('Dashboard KPI');
+        $ws1->getDefaultRowDimension()->setRowHeight(20);
 
-            // SECTION 1: KPI SCORECARD
-            fputcsv($handle, ['=== SECTION 1: RINGKASAN EKSEKUTIF (KPI SCORECARD) ===']);
-            $sep();
-            fputcsv($handle, ['INDIKATOR', 'NILAI (FORMAT)', 'NILAI (IDR)', 'KETERANGAN']);
-            fputcsv($handle, ['Total Pemasukan',  $rp($totalIncome),  $totalIncome,  'Akumulasi seluruh income dalam periode']);
-            fputcsv($handle, ['Total Pengeluaran', $rp($totalExpense), $totalExpense, 'Akumulasi seluruh expense dalam periode']);
-            fputcsv($handle, ['Net Cashflow',      $rp($netCashflow),  $netCashflow,  $netCashflow >= 0 ? 'SURPLUS - Keuangan Sehat' : 'DEFISIT - Perlu Evaluasi']);
-            fputcsv($handle, ['Saving Rate',        $savingRate . '%',  '',            $savingRate >= 20 ? 'BAIK - Target >= 20% tercapai' : 'RENDAH - Target 20% belum tercapai']);
-            fputcsv($handle, ['Burn Rate',          $burnRate . '%',    '',            $burnRate <= 80 ? 'Terkendali' : 'TINGGI - Efisiensi anggaran perlu ditingkatkan']);
-            fputcsv($handle, ['Financial Score',    $healthScore,       '',            'Berdasarkan saving rate periode ini']);
-            $sep();
+        $setBanner($ws1, 1, 'I', '   LAPORAN KEUANGAN PERSONAL - MoneFin Financial Analytics v2.0', $C_WHITE, $C_DARK, 40, 16);
+        $ws1->getStyle('A1')->getFont()->setBold(true);
+        $setBanner($ws1, 2, 'I', '   Dibuat: ' . now()->format('d F Y, H:i') . ' WIB   |   Periode: ' . $periodLabel . '   |   ' . $txCount . ' Transaksi', $C_WHITE, $C_GREEN, 22);
+        $ws1->getRowDimension(3)->setRowHeight(8);
 
-            // SECTION 2: STATISTIK TRANSAKSI
-            fputcsv($handle, ['=== SECTION 2: STATISTIK TRANSAKSI ===']);
-            $sep();
-            fputcsv($handle, ['METRIK', 'NILAI', 'UNIT']);
-            fputcsv($handle, ['Total Transaksi',                  $txCount,         'transaksi']);
-            fputcsv($handle, ['Transaksi Pemasukan',              $incomeCount,     'transaksi']);
-            fputcsv($handle, ['Transaksi Pengeluaran',            $expenseCount,    'transaksi']);
-            fputcsv($handle, ['Rata-rata per Tx Pemasukan',       $rp($avgIncome),  '']);
-            fputcsv($handle, ['Rata-rata per Tx Pengeluaran',     $rp($avgExpense), '']);
-            fputcsv($handle, ['Pemasukan Terbesar (Single Tx)',   $rp($maxIncome),  '']);
-            fputcsv($handle, ['Pengeluaran Terbesar (Single Tx)', $rp($maxExpense), '']);
-            fputcsv($handle, ['Pengeluaran Terkecil (Single Tx)', $rp($minExpense), '']);
-            $sep();
+        // KPI section title
+        $setBanner($ws1, 4, 'I', '   KPI SCORECARD - RINGKASAN EKSEKUTIF', $C_WHITE, $C_GREEN, 28, 11);
+        $ws1->getStyle('A4')->getFont()->setBold(true);
 
-            // SECTION 3: TREN BULANAN
-            fputcsv($handle, ['=== SECTION 3: ANALISIS TREN BULANAN ===']);
-            fputcsv($handle, ['Bulan Surplus: ' . $surplusMonths . '   |   Bulan Defisit: ' . $deficitMonths]);
-            if ($bestMonth)  fputcsv($handle, ['Bulan Terbaik:  ' . ($bestMonth['month'] ?? '-') . ' | Net: ' . $rp($bestMonth['net'] ?? 0) . ' | Save Rate: ' . ($bestMonth['save_rate'] ?? 0) . '%']);
-            if ($worstMonth) fputcsv($handle, ['Bulan Terburuk: ' . ($worstMonth['month'] ?? '-') . ' | Net: ' . $rp($worstMonth['net'] ?? 0) . ' | Burn Rate: ' . ($worstMonth['burn_rate'] ?? 0) . '%']);
-            $sep();
-            fputcsv($handle, ['Bulan', 'Pemasukan', 'Pengeluaran', 'Net Cashflow', 'Saving Rate', 'Burn Rate', 'Status']);
-            foreach ($monthly as $m) {
-                fputcsv($handle, [
-                    $m['month'], $m['income'], $m['expense'], $m['net'],
-                    $m['save_rate'] . '%', $m['burn_rate'] . '%',
-                    $m['net'] >= 0 ? 'Surplus' : 'Defisit',
-                ]);
-            }
-            $sep();
+        // KPI table header
+        $ws1->mergeCells('A5:C5'); $ws1->mergeCells('D5:E5'); $ws1->mergeCells('F5:G5'); $ws1->mergeCells('H5:I5');
+        foreach (['A5' => 'INDIKATOR KEUANGAN', 'D5' => 'NILAI', 'F5' => 'STATUS', 'H5' => 'KETERANGAN'] as $c => $v) {
+            $ws1->setCellValue($c, $v);
+            $ws1->getStyle($c)->getFont()->setBold(true)->setSize(9)->getColor()->setRGB($C_WHITE);
+            $ws1->getStyle($c)->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)->getStartColor()->setRGB($C_SLATE);
+            $ws1->getStyle($c)->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+        }
+        $ws1->getRowDimension(5)->setRowHeight(24);
 
-            // SECTION 4: BREAKDOWN KATEGORI
-            fputcsv($handle, ['=== SECTION 4: BREAKDOWN KATEGORI (RANKED) ===']);
-            $sep();
-            fputcsv($handle, ['Rank', 'Kategori', 'Tipe', 'Jml Tx', 'Total (IDR)', 'Total (Format)', 'Avg per Tx', '% dari Total']);
-            foreach ($categoryStats as $i => $cat) {
-                $pct = $grandAll > 0 ? round($cat['total'] / $grandAll * 100, 1) : 0;
-                fputcsv($handle, [
-                    $i + 1, $cat['name'], ucfirst($cat['type']), $cat['count'],
-                    $cat['total'], $rp($cat['total']), $rp($cat['avg']), $pct . '%',
-                ]);
-            }
-            $sep();
+        $kpiRows = [
+            ['Total Pemasukan',       $rp($totalIncome),   'INCOME',                             'Akumulasi seluruh pemasukan dalam periode',    $C_GREEN, $C_LGRE],
+            ['Total Pengeluaran',     $rp($totalExpense),  'EXPENSE',                            'Akumulasi seluruh pengeluaran dalam periode',   $C_RED,   $C_LRED],
+            ['Net Cashflow',          $rp($netCashflow),   $netCashflow >= 0 ? 'SURPLUS' : 'DEFISIT', $netCashflow >= 0 ? 'Keuangan dalam kondisi positif' : 'Pengeluaran melebihi pemasukan', $netCashflow >= 0 ? $C_GREEN : $C_RED, $netCashflow >= 0 ? $C_LGRE : $C_LRED],
+            ['Saving Rate',           $savingRate . '%',   $savingRate >= 20 ? 'BAIK' : 'RENDAH','Target saving >= 20% dari total pemasukan',     $savingRate >= 20 ? $C_GREEN : $C_AMB, $savingRate >= 20 ? $C_LGRE : $C_LAMB],
+            ['Burn Rate',             $burnRate . '%',     $burnRate <= 80 ? 'TERKENDALI' : 'TINGGI','% pemasukan yang habis dikeluarkan',          $burnRate <= 80 ? $C_GREEN : $C_RED, $burnRate <= 80 ? $C_LGRE : $C_LRED],
+            ['Financial Health Score',$healthScore,        'SCORE',                              'Berdasarkan saving rate periode ini',            $healthColor, 'F1F5F9'],
+        ];
 
-            // SECTION 5: TOP 5 PENGELUARAN
-            fputcsv($handle, ['=== SECTION 5: TOP 5 PENGELUARAN TERBESAR ===']);
-            $sep();
-            fputcsv($handle, ['Rank', 'Tanggal', 'Kategori', 'Akun', 'Jumlah', 'Deskripsi']);
-            foreach ($top5Expenses as $rank => $t) {
-                fputcsv($handle, [
-                    $rank + 1,
-                    $t->transaction_date->format('d/m/Y'),
-                    $t->category?->name ?? '-',
-                    $t->account?->name  ?? '-',
-                    $rp($t->amount),
-                    $t->description ?? '',
-                ]);
-            }
-            $sep();
+        $r = 6;
+        foreach ($kpiRows as $i => $kpi) {
+            $bg = $i % 2 === 0 ? $C_WHITE : 'F8FAFC';
+            $ws1->mergeCells("A{$r}:C{$r}"); $ws1->mergeCells("D{$r}:E{$r}"); $ws1->mergeCells("F{$r}:G{$r}"); $ws1->mergeCells("H{$r}:I{$r}");
+            $ws1->setCellValue("A{$r}", $kpi[0]); $ws1->setCellValue("D{$r}", $kpi[1]); $ws1->setCellValue("F{$r}", $kpi[2]); $ws1->setCellValue("H{$r}", $kpi[3]);
+            $ws1->getStyle("A{$r}")->getFont()->setSize(10)->setBold(true)->getColor()->setRGB($C_DARK);
+            $ws1->getStyle("D{$r}")->getFont()->setSize(11)->setBold(true)->getColor()->setRGB($kpi[4]);
+            $ws1->getStyle("F{$r}")->getFont()->setSize(9)->setBold(true)->getColor()->setRGB($kpi[4]);
+            $ws1->getStyle("H{$r}")->getFont()->setSize(9)->getColor()->setRGB($C_SLATE);
+            $fillBg($ws1, "A{$r}:C{$r}", $bg); $fillBg($ws1, "D{$r}:E{$r}", $bg); $fillBg($ws1, "F{$r}:G{$r}", $kpi[5]); $fillBg($ws1, "H{$r}:I{$r}", $bg);
+            $ws1->getStyle("A{$r}")->getAlignment()->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER)->setIndent(2);
+            $ws1->getStyle("D{$r}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+            $ws1->getStyle("F{$r}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+            $ws1->getStyle("H{$r}")->getAlignment()->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER)->setIndent(1);
+            $ws1->getRowDimension($r)->setRowHeight(28);
+            $r++;
+        }
+        $setAllBorders($ws1, "A5:I" . ($r - 1), $C_BDR);
+        $setOutline($ws1, "A5:I" . ($r - 1), $C_GREEN);
 
-            // SECTION 6: RINCIAN TRANSAKSI
-            fputcsv($handle, ['=== SECTION 6: RINCIAN LENGKAP TRANSAKSI ===']);
-            $sep();
-            fputcsv($handle, ['No.', 'Tanggal', 'Tipe', 'Kategori', 'Akun', 'Jumlah (IDR)', 'Jumlah (Format)', 'Deskripsi']);
-            foreach ($transactions as $i => $t) {
-                fputcsv($handle, [
-                    $i + 1,
-                    $t->transaction_date->format('d/m/Y'),
-                    ucfirst($t->type),
-                    $t->category?->name ?? '-',
-                    $t->account?->name  ?? '-',
-                    (float) $t->amount,
-                    $rp($t->amount),
-                    $t->description ?? '',
-                ]);
-            }
-            $sep();
-            fputcsv($handle, ['Generated by MoneFin Financial Analytics System v2.0']);
-            fputcsv($handle, ['(c) ' . date('Y') . ' MoneFin. Seluruh data bersifat rahasia.']);
-            fclose($handle);
-        }, $filename, [
-            'Content-Type' => 'text/csv; charset=UTF-8',
+        $ws1->getRowDimension($r)->setRowHeight(8); $r++;
+
+        // Stats section title
+        $setBanner($ws1, $r, 'I', '   STATISTIK TRANSAKSI', $C_WHITE, $C_DARK, 28, 11);
+        $ws1->getStyle("A{$r}")->getFont()->setBold(true);
+        $r++;
+
+        // Stats header
+        $ws1->mergeCells("A{$r}:D{$r}"); $ws1->mergeCells("E{$r}:F{$r}"); $ws1->mergeCells("G{$r}:I{$r}");
+        foreach (["A{$r}" => 'METRIK', "E{$r}" => 'NILAI', "G{$r}" => 'KETERANGAN'] as $c => $v) {
+            $ws1->setCellValue($c, $v);
+            $ws1->getStyle($c)->getFont()->setBold(true)->setSize(9)->getColor()->setRGB($C_WHITE);
+            $ws1->getStyle($c)->getFill()->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)->getStartColor()->setRGB($C_SLATE);
+            $ws1->getStyle($c)->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+        }
+        $ws1->getRowDimension($r)->setRowHeight(22);
+        $statHdr = $r; $r++;
+
+        $statRows = [
+            ['Total Seluruh Transaksi',          $txCount . ' Transaksi',     'Semua income + expense'],
+            ['  Transaksi Pemasukan (Income)',    $incomeCount . ' Transaksi', ''],
+            ['  Transaksi Pengeluaran (Expense)', $expenseCount . ' Transaksi',''],
+            ['Rata-rata per Tx (Income)',         $rp($avgIncome),             'Nilai rata-rata transaksi income'],
+            ['Rata-rata per Tx (Expense)',        $rp($avgExpense),            'Nilai rata-rata transaksi expense'],
+            ['Income Terbesar (Single Tx)',       $rp($maxIncome),             'Pemasukan tertinggi dalam 1 transaksi'],
+            ['Expense Terbesar (Single Tx)',      $rp($maxExpense),            'Pengeluaran tertinggi dalam 1 transaksi'],
+            ['Bulan Surplus / Total',             $surplusMonths . ' / ' . $monthly->count() . ' Bulan', 'Cashflow positif'],
+            ['Bulan Terbaik',                     $bestMonth ? ($bestMonth['month'] . ' - Net: ' . $rp($bestMonth['net'])) : 'N/A', ''],
+        ];
+
+        foreach ($statRows as $i => $st) {
+            $bg = $i % 2 === 0 ? $C_WHITE : 'F8FAFC';
+            $ws1->mergeCells("A{$r}:D{$r}"); $ws1->mergeCells("E{$r}:F{$r}"); $ws1->mergeCells("G{$r}:I{$r}");
+            $ws1->setCellValue("A{$r}", $st[0]); $ws1->setCellValue("E{$r}", $st[1]); $ws1->setCellValue("G{$r}", $st[2]);
+            $fillBg($ws1, "A{$r}:D{$r}", $bg); $fillBg($ws1, "E{$r}:F{$r}", $bg); $fillBg($ws1, "G{$r}:I{$r}", $bg);
+            $ws1->getStyle("A{$r}")->getFont()->setSize(9)->getColor()->setRGB($C_DARK);
+            $ws1->getStyle("E{$r}")->getFont()->setSize(9)->setBold(true)->getColor()->setRGB($C_GREEN);
+            $ws1->getStyle("G{$r}")->getFont()->setSize(8)->getColor()->setRGB($C_SLATE);
+            $ws1->getStyle("A{$r}")->getAlignment()->setIndent(1)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+            $ws1->getStyle("E{$r}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+            $ws1->getStyle("G{$r}")->getAlignment()->setIndent(1)->setVertical(\PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER);
+            $ws1->getRowDimension($r)->setRowHeight(22);
+            $r++;
+        }
+        $setAllBorders($ws1, "A{$statHdr}:I" . ($r - 1), $C_BDR);
+        $setOutline($ws1, "A{$statHdr}:I" . ($r - 1), $C_DARK);
+
+        $ws1->getColumnDimension('A')->setWidth(6);  $ws1->getColumnDimension('B')->setWidth(22);
+        $ws1->getColumnDimension('C')->setWidth(14); $ws1->getColumnDimension('D')->setWidth(14);
+        $ws1->getColumnDimension('E')->setWidth(20); $ws1->getColumnDimension('F')->setWidth(14);
+        $ws1->getColumnDimension('G')->setWidth(16); $ws1->getColumnDimension('H')->setWidth(20);
+        $ws1->getColumnDimension('I')->setWidth(18);
+        $ws1->freezePane('A3');
+
+        // ─── SHEET 2: TREN BULANAN ────────────────────────────────────────────
+        $spreadsheet->createSheet();
+        $ws2 = $spreadsheet->setActiveSheetIndex(1)->setTitle('Tren Bulanan');
+        $ws2->getDefaultRowDimension()->setRowHeight(20);
+
+        $setBanner($ws2, 1, 'H', '   ANALISIS TREN BULANAN - ' . strtoupper($periodLabel), $C_WHITE, $C_DARK, 38, 14);
+        $ws2->getStyle('A1')->getFont()->setBold(true);
+        $setBanner($ws2, 2, 'H', '   Surplus: ' . $surplusMonths . ' bulan   |   Defisit: ' . $deficitMonths . ' bulan   |   Total: ' . $monthly->count() . ' bulan   |   Best: ' . ($bestMonth ? $bestMonth['month'] : 'N/A'), $C_WHITE, $C_GREEN, 22);
+
+        $hdrs2 = ['No.', 'Bulan', 'Pemasukan', 'Pengeluaran', 'Net Cashflow', 'Saving Rate', 'Burn Rate', 'Status'];
+        foreach ($hdrs2 as $ci => $h) {
+            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($ci + 1);
+            $applyHdr($ws2, $col, 3, $h, $C_WHITE, $C_DARK);
+        }
+        $ws2->getRowDimension(3)->setRowHeight(24);
+
+        $r2 = 4;
+        foreach ($monthly as $mi => $m) {
+            $isSurplus = $m['net'] >= 0;
+            $isBest    = $bestMonth && $m['month'] === $bestMonth['month'];
+            $bg        = $isBest ? 'FFFBEB' : ($mi % 2 === 0 ? $C_WHITE : $C_BGALT);
+
+            $ws2->setCellValue("A{$r2}", $mi + 1);  $ws2->setCellValue("B{$r2}", $m['month']);
+            $ws2->setCellValue("C{$r2}", $m['income']); $ws2->setCellValue("D{$r2}", $m['expense']);
+            $ws2->setCellValue("E{$r2}", $m['net']); $ws2->setCellValue("F{$r2}", $m['save_rate'] / 100);
+            $ws2->setCellValue("G{$r2}", $m['burn_rate'] / 100);
+            $ws2->setCellValue("H{$r2}", $isSurplus ? ($isBest ? 'Surplus BEST' : 'Surplus') : 'Defisit');
+
+            $ws2->getStyle("C{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws2->getStyle("D{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws2->getStyle("E{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws2->getStyle("F{$r2}")->getNumberFormat()->setFormatCode('0.0%');
+            $ws2->getStyle("G{$r2}")->getNumberFormat()->setFormatCode('0.0%');
+
+            $fillBg($ws2, "A{$r2}:H{$r2}", $bg);
+            $ws2->getStyle("C{$r2}")->getFont()->getColor()->setRGB($C_GREEN);
+            $ws2->getStyle("D{$r2}")->getFont()->getColor()->setRGB($C_RED);
+            $ws2->getStyle("E{$r2}")->getFont()->setBold(true)->getColor()->setRGB($isSurplus ? $C_GREEN : $C_RED);
+            $ws2->getStyle("H{$r2}")->getFont()->setBold(true)->getColor()->setRGB($isSurplus ? $C_GREEN : $C_RED);
+            $ws2->getStyle("A{$r2}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws2->getStyle("C{$r2}:G{$r2}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_RIGHT);
+            $ws2->getStyle("H{$r2}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws2->getRowDimension($r2)->setRowHeight(22);
+            $r2++;
+        }
+
+        // Total row
+        $ws2->setCellValue("B{$r2}", 'TOTAL PERIODE');
+        $ws2->setCellValue("C{$r2}", $totalIncome); $ws2->setCellValue("D{$r2}", $totalExpense);
+        $ws2->setCellValue("E{$r2}", $netCashflow); $ws2->setCellValue("F{$r2}", $savingRate / 100);
+        $ws2->setCellValue("G{$r2}", $burnRate / 100); $ws2->setCellValue("H{$r2}", $netCashflow >= 0 ? 'SURPLUS' : 'DEFISIT');
+        $ws2->getStyle("C{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+        $ws2->getStyle("D{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+        $ws2->getStyle("E{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+        $ws2->getStyle("F{$r2}")->getNumberFormat()->setFormatCode('0.0%');
+        $ws2->getStyle("G{$r2}")->getNumberFormat()->setFormatCode('0.0%');
+        $fillBg($ws2, "A{$r2}:H{$r2}", 'EFF6FF');
+        $ws2->getStyle("A{$r2}:H{$r2}")->getFont()->setBold(true);
+        $ws2->getStyle("E{$r2}")->getFont()->getColor()->setRGB($netCashflow >= 0 ? $C_GREEN : $C_RED);
+        $ws2->getStyle("H{$r2}")->getFont()->getColor()->setRGB($netCashflow >= 0 ? $C_GREEN : $C_RED);
+        $ws2->getStyle("B{$r2}:H{$r2}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+        $ws2->getStyle("C{$r2}:G{$r2}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_RIGHT);
+        $ws2->getRowDimension($r2)->setRowHeight(24);
+
+        $setAllBorders($ws2, "A3:H{$r2}", $C_BDR);
+        $setOutline($ws2, "A3:H{$r2}", $C_DARK);
+
+        $ws2->getColumnDimension('A')->setWidth(6);  $ws2->getColumnDimension('B')->setWidth(14);
+        $ws2->getColumnDimension('C')->setWidth(22); $ws2->getColumnDimension('D')->setWidth(22);
+        $ws2->getColumnDimension('E')->setWidth(22); $ws2->getColumnDimension('F')->setWidth(14);
+        $ws2->getColumnDimension('G')->setWidth(14); $ws2->getColumnDimension('H')->setWidth(16);
+        $ws2->freezePane('A4');
+
+        // ─── SHEET 3: KATEGORI ────────────────────────────────────────────────
+        $spreadsheet->createSheet();
+        $ws3 = $spreadsheet->setActiveSheetIndex(2)->setTitle('Breakdown Kategori');
+        $ws3->getDefaultRowDimension()->setRowHeight(20);
+
+        $setBanner($ws3, 1, 'H', '   BREAKDOWN KATEGORI - RANKED BY TOTAL', $C_WHITE, $C_DARK, 38, 14);
+        $ws3->getStyle('A1')->getFont()->setBold(true);
+        $setBanner($ws3, 2, 'H', '   ' . $categoryStats->count() . ' Kategori Ditemukan   |   Grand Total: ' . $rp($grandAll), $C_WHITE, $C_GREEN, 22);
+
+        $hdrs3 = ['Rank', 'Kategori', 'Tipe', 'Jml Tx', 'Total (IDR)', 'Avg / Tx', '% dr Total', 'Label'];
+        foreach ($hdrs3 as $ci => $h) {
+            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($ci + 1);
+            $applyHdr($ws3, $col, 3, $h, $C_WHITE, $C_DARK);
+        }
+        $ws3->getRowDimension(3)->setRowHeight(24);
+
+        $r3 = 4;
+        foreach ($categoryStats as $ci => $cat) {
+            $isInc = $cat['type'] === 'income';
+            $pct   = $grandAll > 0 ? round($cat['total'] / $grandAll * 100, 1) : 0;
+            $bg    = $ci % 2 === 0 ? $C_WHITE : $C_BGALT;
+            $tc    = $isInc ? $C_GREEN : $C_RED;
+            $label = $ci === 0 ? 'Terbesar' : ($ci === $categoryStats->count() - 1 ? 'Terkecil' : '');
+
+            $ws3->setCellValue("A{$r3}", $ci + 1);     $ws3->setCellValue("B{$r3}", $cat['name']);
+            $ws3->setCellValue("C{$r3}", ucfirst($cat['type'])); $ws3->setCellValue("D{$r3}", $cat['count']);
+            $ws3->setCellValue("E{$r3}", $cat['total']); $ws3->setCellValue("F{$r3}", $cat['avg']);
+            $ws3->setCellValue("G{$r3}", $pct / 100);  $ws3->setCellValue("H{$r3}", $label);
+
+            $ws3->getStyle("E{$r3}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws3->getStyle("F{$r3}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws3->getStyle("G{$r3}")->getNumberFormat()->setFormatCode('0.0%');
+
+            $fillBg($ws3, "A{$r3}:H{$r3}", $bg);
+            $ws3->getStyle("A{$r3}")->getFont()->setBold(true)->getColor()->setRGB($C_SLATE);
+            $ws3->getStyle("B{$r3}")->getFont()->setBold(true)->getColor()->setRGB($C_DARK);
+            $ws3->getStyle("C{$r3}")->getFont()->setBold(true)->getColor()->setRGB($tc);
+            $ws3->getStyle("E{$r3}")->getFont()->setBold(true)->getColor()->setRGB($tc);
+            $ws3->getStyle("G{$r3}")->getFont()->setBold(true);
+            $ws3->getStyle("H{$r3}")->getFont()->setBold(true)->getColor()->setRGB($ci === 0 ? $C_AMB : $C_SLATE);
+            $ws3->getStyle("A{$r3}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws3->getStyle("C{$r3}:D{$r3}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws3->getStyle("E{$r3}:G{$r3}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_RIGHT);
+            $ws3->getStyle("H{$r3}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws3->getRowDimension($r3)->setRowHeight(22);
+            $r3++;
+        }
+        $setAllBorders($ws3, "A3:H{$r3}", $C_BDR);
+        $setOutline($ws3, "A3:H{$r3}", $C_DARK);
+
+        $ws3->getColumnDimension('A')->setWidth(7);  $ws3->getColumnDimension('B')->setWidth(26);
+        $ws3->getColumnDimension('C')->setWidth(14); $ws3->getColumnDimension('D')->setWidth(10);
+        $ws3->getColumnDimension('E')->setWidth(22); $ws3->getColumnDimension('F')->setWidth(20);
+        $ws3->getColumnDimension('G')->setWidth(13); $ws3->getColumnDimension('H')->setWidth(12);
+        $ws3->freezePane('A4');
+
+        // ─── SHEET 4: DETAIL TRANSAKSI ────────────────────────────────────────
+        $spreadsheet->createSheet();
+        $ws4 = $spreadsheet->setActiveSheetIndex(3)->setTitle('Detail Transaksi');
+        $ws4->getDefaultRowDimension()->setRowHeight(20);
+
+        $setBanner($ws4, 1, 'H', '   RINCIAN LENGKAP TRANSAKSI - ' . $txCount . ' TRANSAKSI', $C_WHITE, $C_DARK, 38, 14);
+        $ws4->getStyle('A1')->getFont()->setBold(true);
+        $setBanner($ws4, 2, 'H', '   Pemasukan: ' . $rp($totalIncome) . '   |   Pengeluaran: ' . $rp($totalExpense) . '   |   Net: ' . $rp($netCashflow), $C_WHITE, $netCashflow >= 0 ? $C_GREEN : $C_RED, 22);
+
+        $hdrs4 = ['No.', 'Tanggal', 'Tipe', 'Kategori', 'Akun', 'Jumlah', 'Bulan', 'Deskripsi'];
+        foreach ($hdrs4 as $ci => $h) {
+            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($ci + 1);
+            $applyHdr($ws4, $col, 3, $h, $C_WHITE, $C_DARK);
+        }
+        $ws4->getRowDimension(3)->setRowHeight(24);
+
+        $r4 = 4;
+        foreach ($transactions as $ti => $t) {
+            $isInc = $t->type === 'income';
+            $bg    = $ti % 2 === 0 ? $C_WHITE : $C_BGALT;
+            $tc    = $isInc ? $C_GREEN : $C_RED;
+
+            $ws4->setCellValue("A{$r4}", $ti + 1);
+            $ws4->setCellValue("B{$r4}", $t->transaction_date->format('d/m/Y'));
+            $ws4->setCellValue("C{$r4}", ucfirst($t->type));
+            $ws4->setCellValue("D{$r4}", $t->category?->name ?? '-');
+            $ws4->setCellValue("E{$r4}", $t->account?->name  ?? '-');
+            $ws4->setCellValue("F{$r4}", (float) $t->amount);
+            $ws4->setCellValue("G{$r4}", $t->transaction_date->format('Y-m'));
+            $ws4->setCellValue("H{$r4}", $t->description ?? '');
+
+            $ws4->getStyle("F{$r4}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+
+            $fillBg($ws4, "A{$r4}:H{$r4}", $bg);
+            $ws4->getStyle("C{$r4}")->getFont()->setBold(true)->getColor()->setRGB($tc);
+            $ws4->getStyle("F{$r4}")->getFont()->setBold(true)->getColor()->setRGB($tc);
+            $ws4->getStyle("A{$r4}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws4->getStyle("B{$r4}:C{$r4}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws4->getStyle("F{$r4}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_RIGHT);
+            $ws4->getStyle("G{$r4}")->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
+            $ws4->getRowDimension($r4)->setRowHeight(22);
+            $r4++;
+        }
+        $setAllBorders($ws4, "A3:H{$r4}", $C_BDR);
+        $setOutline($ws4, "A3:H{$r4}", $C_DARK);
+        $ws4->setAutoFilter("A3:H3");
+
+        $ws4->getColumnDimension('A')->setWidth(7);  $ws4->getColumnDimension('B')->setWidth(14);
+        $ws4->getColumnDimension('C')->setWidth(14); $ws4->getColumnDimension('D')->setWidth(24);
+        $ws4->getColumnDimension('E')->setWidth(18); $ws4->getColumnDimension('F')->setWidth(22);
+        $ws4->getColumnDimension('G')->setWidth(12); $ws4->getColumnDimension('H')->setWidth(36);
+        $ws4->freezePane('A4');
+
+        // Activate dashboard
+        $spreadsheet->setActiveSheetIndex(0);
+
+        // Stream xlsx
+        $filename = 'MoneFin_LaporanKeuangan_' . now()->format('Ymd_His') . '.xlsx';
+        $writer   = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        ob_start();
+        $writer->save('php://output');
+        $content = ob_get_clean();
+
+        return response($content, 200, [
+            'Content-Type'        => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Cache-Control'       => 'max-age=0',
+            'Pragma'              => 'public',
         ]);
     }
 }
