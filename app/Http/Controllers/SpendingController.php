@@ -50,4 +50,16 @@ class SpendingController extends Controller
 
         return response()->json(['message' => 'Notifikasi telah ditandai dibaca.']);
     }
+    /**
+     * PATCH /api/notifications/read-all
+     * Tandai semua notifikasi milik user sebagai sudah dibaca.
+     */
+    public function markAllRead(Request $request): JsonResponse
+    {
+        SpendingNotification::where('user_id', $request->user()->id)
+            ->where('is_read', false)
+            ->update(['is_read' => true]);
+
+        return response()->json(['message' => 'Semua notifikasi telah ditandai dibaca.']);
+    }
 }

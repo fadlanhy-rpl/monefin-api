@@ -8,6 +8,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\GoalController;
 use App\Http\Controllers\IncomeSettingController;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\SearchController;
 use App\Http\Controllers\SpendingController;
 use App\Http\Controllers\SpendingThresholdController;
 use App\Http\Controllers\TransactionController;
@@ -77,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Spending Analysis
     Route::get('/spending-status',        [SpendingController::class, 'status']);
     Route::get('/notifications',          [SpendingController::class, 'notifications']);
+    Route::patch('/notifications/read-all', [SpendingController::class, 'markAllRead']);
     Route::patch('/notifications/{id}/read', [SpendingController::class, 'markRead']);
 
     // Dashboard
@@ -86,4 +88,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/compare',            [ReportController::class, 'compare']);
     Route::get('/reports/export',             [ReportController::class, 'export']);
     Route::get('/reports/category-breakdown', [ReportController::class, 'categoryBreakdown']);
+
+    // Global Search
+    Route::get('/search', [SearchController::class, 'index']);
 });
