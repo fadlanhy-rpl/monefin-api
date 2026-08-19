@@ -55,8 +55,63 @@ class TransactionController extends Controller
         // Update saldo akun
         $this->updateAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
 
-        // Rekam analisis spending
+        // Rekam analisis spending (overall)
         $this->spending->recordNotification($request->user());
+
+        // --- Fitur Preferences: txAlert ---
+        $preferences = $request->user()->preferences ?? [];
+        if (isset($preferences['txAlert']) && $preferences['txAlert'] === true) {
+            \App\Models\SpendingNotification::create([
+                'user_id' => $request->user()->id,
+                'type' => 'transaction_alert',
+                'period_type' => null,
+                'period_label' => date('Y-m-d'),
+                'spent_percent' => 0,
+                'message' => 'Transaksi baru: ' . ($transaction->type === 'income' ? '+' : '-') . 'Rp ' . number_format($transaction->amount, 0, ',', '.') . ' (' . ($transaction->category->name ?? 'Tanpa Kategori') . ')',
+                'is_read' => false,
+            ]);
+        }
+
+        // --- Fitur Preferences: budgetAlert ---
+        if (isset($preferences['budgetAlert']) && $preferences['budgetAlert'] === true && $transaction->type === 'expense') {
+            // Check budget for the category
+            $budget = \App\Models\Budget::where('user_id', $request->user()->id)
+                ->where('category_id', $transaction->category_id)
+                ->where('month', date('Y-m'))
+                ->first();
+
+            if ($budget && $budget->limit_amount > 0) {
+                // Get total expenses for this category in this month
+                $totalSpent = \App\Models\Transaction::where('user_id', $request->user()->id)
+                    ->where('category_id', $transaction->category_id)
+                    ->where('type', 'expense')
+                    ->whereYear('transaction_date', date('Y'))
+                    ->whereMonth('transaction_date', date('m'))
+                    ->sum('amount');
+                
+                $percent = ($totalSpent / $budget->limit_amount) * 100;
+                
+                if ($percent >= 80) {
+                    // Check if already sent a budget alert for this category this month
+                    $existingAlert = \App\Models\SpendingNotification::where('user_id', $request->user()->id)
+                        ->where('type', 'budget_alert')
+                        ->where('period_label', 'cat_' . $transaction->category_id . '_' . date('Y-m'))
+                        ->first();
+                        
+                    if (!$existingAlert) {
+                        \App\Models\SpendingNotification::create([
+                            'user_id' => $request->user()->id,
+                            'type' => 'budget_alert',
+                            'period_type' => 'monthly',
+                            'period_label' => 'cat_' . $transaction->category_id . '_' . date('Y-m'),
+                            'spent_percent' => $percent,
+                            'message' => 'Peringatan: Pengeluaran ' . ($transaction->category->name ?? 'Kategori') . ' mencapai ' . round($percent) . '% dari limit bulan ini!',
+                            'is_read' => false,
+                        ]);
+                    }
+                }
+            }
+        }
 
         return response()->json([
             'message' => 'Transaksi berhasil disimpan.',
