@@ -259,8 +259,12 @@ class AuthController extends Controller
         $user = $request->user();
 
         $validator = Validator::make($request->all(), [
-            'name'  => ['required', 'string', 'max:255'],
-            'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
+            'name'        => ['required', 'string', 'max:255'],
+            'photo'       => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
+            'phone'       => 'nullable|string|max:50',
+            'occupation'  => 'nullable|string|max:100',
+            'bio'         => 'nullable|string',
+            'preferences' => 'nullable|string', // Since it might be sent as JSON string in FormData
         ], [
             'photo.image' => 'File harus berupa gambar.',
             'photo.mimes' => 'Format gambar harus jpeg, png, jpg, gif, atau webp.',
@@ -275,7 +279,19 @@ class AuthController extends Controller
         }
 
         try {
-            $data = ['name' => strip_tags($request->name)];
+            $data = [
+                'name'       => strip_tags($request->name),
+                'phone'      => $request->phone ? strip_tags($request->phone) : null,
+                'occupation' => $request->occupation ? strip_tags($request->occupation) : null,
+                'bio'        => $request->bio ? strip_tags($request->bio) : null,
+            ];
+
+            if ($request->has('preferences') && !is_null($request->preferences)) {
+                $prefs = json_decode($request->preferences, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $data['preferences'] = $prefs;
+                }
+            }
 
             if ($request->hasFile('photo')) {
                 $file = $request->file('photo');
