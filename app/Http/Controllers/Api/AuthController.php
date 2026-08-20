@@ -518,4 +518,26 @@ class AuthController extends Controller
             'message' => 'Password berhasil diperbarui. Silakan login kembali.',
         ]);
     }
+
+    // =========================================================
+    // DELETE ACCOUNT
+    // =========================================================
+
+    /**
+     * DELETE /api/auth/profile
+     */
+    public function destroy(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        
+        // Revoke all tokens
+        $user->tokens()->delete();
+        
+        // Delete the user (cascades to all related data)
+        $user->delete();
+
+        return response()->json([
+            'message' => 'Akun dan seluruh data berhasil dihapus secara permanen.',
+        ]);
+    }
 }

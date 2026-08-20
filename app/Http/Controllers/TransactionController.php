@@ -64,7 +64,7 @@ class TransactionController extends Controller
             \App\Models\SpendingNotification::create([
                 'user_id' => $request->user()->id,
                 'type' => 'transaction_alert',
-                'period_type' => null,
+                'period_type' => 'daily',
                 'period_label' => date('Y-m-d'),
                 'spent_percent' => 0,
                 'message' => 'Transaksi baru: ' . ($transaction->type === 'income' ? '+' : '-') . 'Rp ' . number_format($transaction->amount, 0, ',', '.') . ' (' . ($transaction->category->name ?? 'Tanpa Kategori') . ')',
@@ -77,7 +77,8 @@ class TransactionController extends Controller
             // Check budget for the category
             $budget = \App\Models\Budget::where('user_id', $request->user()->id)
                 ->where('category_id', $transaction->category_id)
-                ->where('month', date('Y-m'))
+                ->where('month', date('n'))
+                ->where('year', date('Y'))
                 ->first();
 
             if ($budget && $budget->limit_amount > 0) {
