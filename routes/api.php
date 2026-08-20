@@ -12,6 +12,7 @@ use App\Http\Controllers\SearchController;
 use App\Http\Controllers\SpendingController;
 use App\Http\Controllers\SpendingThresholdController;
 use App\Http\Controllers\TransactionController;
+use App\Http\Controllers\TrashController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Public Auth Routes (rate limited) ───────────────────────────────────────
@@ -81,6 +82,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications',          [SpendingController::class, 'notifications']);
     Route::patch('/notifications/read-all', [SpendingController::class, 'markAllRead']);
     Route::patch('/notifications/{id}/read', [SpendingController::class, 'markRead']);
+
+    // Trashbin
+    Route::get('/trash',                      [TrashController::class, 'index']);
+    Route::post('/trash/{type}/{id}/restore', [TrashController::class, 'restore']);
+    Route::delete('/trash/{type}/{id}/force', [TrashController::class, 'forceDelete']);
 
     // Dashboard
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
