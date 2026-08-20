@@ -40,6 +40,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/auth/logout',   [AuthController::class, 'logout']);
     Route::post('/auth/profile',  [AuthController::class, 'updateProfile']);
     Route::post('/auth/password', [AuthController::class, 'updatePassword']);
+    Route::delete('/auth/profile', [AuthController::class, 'destroy']);
 
     // Backward-compatible aliases
     Route::post('/logout', [AuthController::class, 'logout']);
