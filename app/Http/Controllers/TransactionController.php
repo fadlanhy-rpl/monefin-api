@@ -77,7 +77,8 @@ class TransactionController extends Controller
             // Check budget for the category
             $budget = \App\Models\Budget::where('user_id', $request->user()->id)
                 ->where('category_id', $transaction->category_id)
-                ->where('month', date('Y-m'))
+                ->where('month', date('n'))
+                ->where('year', date('Y'))
                 ->first();
 
             if ($budget && $budget->limit_amount > 0) {
