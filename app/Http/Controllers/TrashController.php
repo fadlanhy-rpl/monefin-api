@@ -18,6 +18,8 @@ class TrashController extends Controller
 
     public function __construct(SpendingAnalysisService $spending)
     {
+
+        
         $this->spending = $spending;
     }
 

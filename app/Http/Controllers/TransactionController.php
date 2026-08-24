@@ -25,8 +25,14 @@ class TransactionController extends Controller
             ->when($request->end_date,   fn ($q) => $q->where('transaction_date', '<=', $request->end_date))
             ->when($request->category_id, fn ($q) => $q->where('category_id', $request->category_id))
             ->when($request->account_id,  fn ($q) => $q->where('account_id', $request->account_id))
-            ->when($request->type,        fn ($q) => $q->where('type', $request->type))
-            ->when($request->search, fn ($q) => $q->where('description', 'like', "%{$request->search}%"))
+            ->when($request->search, function ($q) use ($request) {
+                $search = $request->search;
+                $operator = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+                $q->where(function ($sq) use ($search, $operator) {
+                    $sq->where('description', $operator, "%{$search}%")
+                       ->orWhereHas('category', fn($c) => $c->where('name', $operator, "%{$search}%"));
+                });
+            })
             ->orderBy('transaction_date', 'desc')
             ->orderBy('created_at', 'desc');
 
@@ -67,7 +73,7 @@ class TransactionController extends Controller
                 'period_type' => 'daily',
                 'period_label' => date('Y-m-d'),
                 'spent_percent' => 0,
-                'message' => 'Transaksi baru: ' . ($transaction->type === 'income' ? '+' : '-') . 'Rp ' . number_format($transaction->amount, 0, ',', '.') . ' (' . ($transaction->category->name ?? 'Tanpa Kategori') . ')',
+                'message' => 'Transaksi baru: ' . ($transaction->type === 'income' ? '+' : '-') . number_format($transaction->amount, 0, ',', '.') . ' (' . ($transaction->category->name ?? 'Tanpa Kategori') . ')',
                 'is_read' => false,
             ]);
         }
