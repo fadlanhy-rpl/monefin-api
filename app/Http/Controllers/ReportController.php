@@ -138,6 +138,23 @@ class ReportController extends Controller
     public function export(Request $request): \Illuminate\Http\Response
     {
         $user = $request->user();
+        $currencyCode = $request->query('currency', 'IDR');
+        $exchangeRate = (float) $request->query('exchange_rate', 1);
+        if ($exchangeRate <= 0) $exchangeRate = 1;
+        
+        // Currency format untuk Excel number format dan string helper
+        $currFormat = match($currencyCode) {
+            'USD' => '"$"#,##0.00',
+            'EUR' => '"€"#,##0.00',
+            'SGD' => '"S$"#,##0.00',
+            default => '"Rp "#,##0',
+        };
+        $fmt = match($currencyCode) {
+            'USD' => fn ($v) => '$' . number_format((float) $v, 2, '.', ','),
+            'EUR' => fn ($v) => '€' . number_format((float) $v, 2, '.', ','),
+            'SGD' => fn ($v) => 'S$' . number_format((float) $v, 2, '.', ','),
+            default => fn ($v) => 'Rp ' . number_format((float) $v, 0, ',', '.'),
+        };
 
         $transactions = Transaction::where('user_id', $user->id)
             ->with(['account', 'category'])
@@ -152,8 +169,8 @@ class ReportController extends Controller
         // KPIs
         $incTx        = $transactions->where('type', 'income');
         $expTx        = $transactions->where('type', 'expense');
-        $totalIncome  = (float) $incTx->sum('amount');
-        $totalExpense = (float) $expTx->sum('amount');
+        $totalIncome  = (float) $incTx->sum('amount') / $exchangeRate;
+        $totalExpense = (float) $expTx->sum('amount') / $exchangeRate;
         $netCashflow  = $totalIncome - $totalExpense;
         $savingRate   = $totalIncome > 0 ? round($netCashflow / $totalIncome * 100, 1) : 0;
         $burnRate     = $totalIncome > 0 ? round($totalExpense / $totalIncome * 100, 1) : 0;
@@ -162,8 +179,8 @@ class ReportController extends Controller
         $expenseCount = $expTx->count();
         $avgIncome    = $incomeCount  > 0 ? $totalIncome  / $incomeCount  : 0;
         $avgExpense   = $expenseCount > 0 ? $totalExpense / $expenseCount : 0;
-        $maxExpense   = (float) ($expTx->max('amount') ?? 0);
-        $maxIncome    = (float) ($incTx->max('amount') ?? 0);
+        $maxExpense   = (float) ($expTx->max('amount') ?? 0) / $exchangeRate;
+        $maxIncome    = (float) ($incTx->max('amount') ?? 0) / $exchangeRate;
         $healthScore  = $savingRate >= 30 ? 'A - Sangat Sehat' : ($savingRate >= 20 ? 'B - Sehat' : ($savingRate >= 10 ? 'C - Cukup' : 'D - Perlu Perhatian'));
         $healthColor  = $savingRate >= 30 ? '00685F' : ($savingRate >= 20 ? '059669' : ($savingRate >= 10 ? 'd97706' : 'dc2626'));
 
@@ -180,7 +197,7 @@ class ReportController extends Controller
         $monthly = [];
         foreach ($monthlyRows as $r) {
             $monthly[$r->month] ??= ['month' => $r->month, 'income' => 0, 'expense' => 0];
-            $monthly[$r->month][$r->type] += (float) $r->total;
+            $monthly[$r->month][$r->type] += ((float) $r->total) / $exchangeRate;
         }
         $monthly = collect($monthly)->map(fn ($m) => array_merge($m, [
             'net'       => $m['income'] - $m['expense'],
@@ -193,15 +210,15 @@ class ReportController extends Controller
         $bestMonth     = $monthly->sortByDesc('net')->first();
 
         // Category breakdown
-        $grandAll      = (float) $transactions->sum('amount');
+        $grandAll      = (float) $transactions->sum('amount') / $exchangeRate;
         $categoryStats = $transactions
             ->groupBy(fn ($t) => ($t->category?->name ?? 'Lain-lain') . '|||' . $t->type)
             ->map(fn ($group, $key) => [
                 'name'  => explode('|||', $key)[0],
                 'type'  => explode('|||', $key)[1],
                 'count' => $group->count(),
-                'total' => (float) $group->sum('amount'),
-                'avg'   => round((float) $group->sum('amount') / $group->count(), 0),
+                'total' => (float) $group->sum('amount') / $exchangeRate,
+                'avg'   => round(((float) $group->sum('amount') / $group->count()) / $exchangeRate, 2),
             ])->sortByDesc('total')->values();
 
         $periodLabel = ($request->start_date && $request->end_date)
@@ -220,7 +237,7 @@ class ReportController extends Controller
         $C_WHITE = 'FFFFFF';
         $C_BDR   = 'CBD5E1';
 
-        $rp = fn ($v) => 'Rp ' . number_format((float) $v, 0, ',', '.');
+
 
         $applyHdr = function ($ws, $col, $row, $txt, $fgColor, $bgColor, $sz = 9) {
             $cell = $ws->getCell($col . $row);
@@ -282,9 +299,9 @@ class ReportController extends Controller
         $ws1->getRowDimension(5)->setRowHeight(24);
 
         $kpiRows = [
-            ['Total Pemasukan',       $rp($totalIncome),   'INCOME',                             'Akumulasi seluruh pemasukan dalam periode',    $C_GREEN, $C_LGRE],
-            ['Total Pengeluaran',     $rp($totalExpense),  'EXPENSE',                            'Akumulasi seluruh pengeluaran dalam periode',   $C_RED,   $C_LRED],
-            ['Net Cashflow',          $rp($netCashflow),   $netCashflow >= 0 ? 'SURPLUS' : 'DEFISIT', $netCashflow >= 0 ? 'Keuangan dalam kondisi positif' : 'Pengeluaran melebihi pemasukan', $netCashflow >= 0 ? $C_GREEN : $C_RED, $netCashflow >= 0 ? $C_LGRE : $C_LRED],
+            ['Total Pemasukan',       $fmt($totalIncome),   'INCOME',                             'Akumulasi seluruh pemasukan dalam periode',    $C_GREEN, $C_LGRE],
+            ['Total Pengeluaran',     $fmt($totalExpense),  'EXPENSE',                            'Akumulasi seluruh pengeluaran dalam periode',   $C_RED,   $C_LRED],
+            ['Net Cashflow',          $fmt($netCashflow),   $netCashflow >= 0 ? 'SURPLUS' : 'DEFISIT', $netCashflow >= 0 ? 'Keuangan dalam kondisi positif' : 'Pengeluaran melebihi pemasukan', $netCashflow >= 0 ? $C_GREEN : $C_RED, $netCashflow >= 0 ? $C_LGRE : $C_LRED],
             ['Saving Rate',           $savingRate . '%',   $savingRate >= 20 ? 'BAIK' : 'RENDAH','Target saving >= 20% dari total pemasukan',     $savingRate >= 20 ? $C_GREEN : $C_AMB, $savingRate >= 20 ? $C_LGRE : $C_LAMB],
             ['Burn Rate',             $burnRate . '%',     $burnRate <= 80 ? 'TERKENDALI' : 'TINGGI','% pemasukan yang habis dikeluarkan',          $burnRate <= 80 ? $C_GREEN : $C_RED, $burnRate <= 80 ? $C_LGRE : $C_LRED],
             ['Financial Health Score',$healthScore,        'SCORE',                              'Berdasarkan saving rate periode ini',            $healthColor, 'F1F5F9'],
@@ -332,12 +349,12 @@ class ReportController extends Controller
             ['Total Seluruh Transaksi',          $txCount . ' Transaksi',     'Semua income + expense'],
             ['  Transaksi Pemasukan (Income)',    $incomeCount . ' Transaksi', ''],
             ['  Transaksi Pengeluaran (Expense)', $expenseCount . ' Transaksi',''],
-            ['Rata-rata per Tx (Income)',         $rp($avgIncome),             'Nilai rata-rata transaksi income'],
-            ['Rata-rata per Tx (Expense)',        $rp($avgExpense),            'Nilai rata-rata transaksi expense'],
-            ['Income Terbesar (Single Tx)',       $rp($maxIncome),             'Pemasukan tertinggi dalam 1 transaksi'],
-            ['Expense Terbesar (Single Tx)',      $rp($maxExpense),            'Pengeluaran tertinggi dalam 1 transaksi'],
+            ['Rata-rata per Tx (Income)',         $fmt($avgIncome),             'Nilai rata-rata transaksi income'],
+            ['Rata-rata per Tx (Expense)',        $fmt($avgExpense),            'Nilai rata-rata transaksi expense'],
+            ['Income Terbesar (Single Tx)',       $fmt($maxIncome),             'Pemasukan tertinggi dalam 1 transaksi'],
+            ['Expense Terbesar (Single Tx)',      $fmt($maxExpense),            'Pengeluaran tertinggi dalam 1 transaksi'],
             ['Bulan Surplus / Total',             $surplusMonths . ' / ' . $monthly->count() . ' Bulan', 'Cashflow positif'],
-            ['Bulan Terbaik',                     $bestMonth ? ($bestMonth['month'] . ' - Net: ' . $rp($bestMonth['net'])) : 'N/A', ''],
+            ['Bulan Terbaik',                     $bestMonth ? ($bestMonth['month'] . ' - Net: ' . $fmt($bestMonth['net'])) : 'N/A', ''],
         ];
 
         foreach ($statRows as $i => $st) {
@@ -392,9 +409,9 @@ class ReportController extends Controller
             $ws2->setCellValue("G{$r2}", $m['burn_rate'] / 100);
             $ws2->setCellValue("H{$r2}", $isSurplus ? ($isBest ? 'Surplus BEST' : 'Surplus') : 'Defisit');
 
-            $ws2->getStyle("C{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
-            $ws2->getStyle("D{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
-            $ws2->getStyle("E{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws2->getStyle("C{$r2}")->getNumberFormat()->setFormatCode($currFormat);
+            $ws2->getStyle("D{$r2}")->getNumberFormat()->setFormatCode($currFormat);
+            $ws2->getStyle("E{$r2}")->getNumberFormat()->setFormatCode($currFormat);
             $ws2->getStyle("F{$r2}")->getNumberFormat()->setFormatCode('0.0%');
             $ws2->getStyle("G{$r2}")->getNumberFormat()->setFormatCode('0.0%');
 
@@ -415,9 +432,9 @@ class ReportController extends Controller
         $ws2->setCellValue("C{$r2}", $totalIncome); $ws2->setCellValue("D{$r2}", $totalExpense);
         $ws2->setCellValue("E{$r2}", $netCashflow); $ws2->setCellValue("F{$r2}", $savingRate / 100);
         $ws2->setCellValue("G{$r2}", $burnRate / 100); $ws2->setCellValue("H{$r2}", $netCashflow >= 0 ? 'SURPLUS' : 'DEFISIT');
-        $ws2->getStyle("C{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
-        $ws2->getStyle("D{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
-        $ws2->getStyle("E{$r2}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+        $ws2->getStyle("C{$r2}")->getNumberFormat()->setFormatCode($currFormat);
+        $ws2->getStyle("D{$r2}")->getNumberFormat()->setFormatCode($currFormat);
+        $ws2->getStyle("E{$r2}")->getNumberFormat()->setFormatCode($currFormat);
         $ws2->getStyle("F{$r2}")->getNumberFormat()->setFormatCode('0.0%');
         $ws2->getStyle("G{$r2}")->getNumberFormat()->setFormatCode('0.0%');
         $fillBg($ws2, "A{$r2}:H{$r2}", 'EFF6FF');
@@ -444,7 +461,7 @@ class ReportController extends Controller
 
         $setBanner($ws3, 1, 'H', '   BREAKDOWN KATEGORI - RANKED BY TOTAL', $C_WHITE, $C_DARK, 38, 14);
         $ws3->getStyle('A1')->getFont()->setBold(true);
-        $setBanner($ws3, 2, 'H', '   ' . $categoryStats->count() . ' Kategori Ditemukan   |   Grand Total: ' . $rp($grandAll), $C_WHITE, $C_GREEN, 22);
+        $setBanner($ws3, 2, 'H', '   ' . $categoryStats->count() . ' Kategori Ditemukan   |   Grand Total: ' . $fmt($grandAll), $C_WHITE, $C_GREEN, 22);
 
         $hdrs3 = ['Rank', 'Kategori', 'Tipe', 'Jml Tx', 'Total (IDR)', 'Avg / Tx', '% dr Total', 'Label'];
         foreach ($hdrs3 as $ci => $h) {
@@ -466,8 +483,8 @@ class ReportController extends Controller
             $ws3->setCellValue("E{$r3}", $cat['total']); $ws3->setCellValue("F{$r3}", $cat['avg']);
             $ws3->setCellValue("G{$r3}", $pct / 100);  $ws3->setCellValue("H{$r3}", $label);
 
-            $ws3->getStyle("E{$r3}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
-            $ws3->getStyle("F{$r3}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws3->getStyle("E{$r3}")->getNumberFormat()->setFormatCode($currFormat);
+            $ws3->getStyle("F{$r3}")->getNumberFormat()->setFormatCode($currFormat);
             $ws3->getStyle("G{$r3}")->getNumberFormat()->setFormatCode('0.0%');
 
             $fillBg($ws3, "A{$r3}:H{$r3}", $bg);
@@ -500,7 +517,7 @@ class ReportController extends Controller
 
         $setBanner($ws4, 1, 'H', '   RINCIAN LENGKAP TRANSAKSI - ' . $txCount . ' TRANSAKSI', $C_WHITE, $C_DARK, 38, 14);
         $ws4->getStyle('A1')->getFont()->setBold(true);
-        $setBanner($ws4, 2, 'H', '   Pemasukan: ' . $rp($totalIncome) . '   |   Pengeluaran: ' . $rp($totalExpense) . '   |   Net: ' . $rp($netCashflow), $C_WHITE, $netCashflow >= 0 ? $C_GREEN : $C_RED, 22);
+        $setBanner($ws4, 2, 'H', '   Pemasukan: ' . $fmt($totalIncome) . '   |   Pengeluaran: ' . $fmt($totalExpense) . '   |   Net: ' . $fmt($netCashflow), $C_WHITE, $netCashflow >= 0 ? $C_GREEN : $C_RED, 22);
 
         $hdrs4 = ['No.', 'Tanggal', 'Tipe', 'Kategori', 'Akun', 'Jumlah', 'Bulan', 'Deskripsi'];
         foreach ($hdrs4 as $ci => $h) {
@@ -520,11 +537,11 @@ class ReportController extends Controller
             $ws4->setCellValue("C{$r4}", ucfirst($t->type));
             $ws4->setCellValue("D{$r4}", $t->category?->name ?? '-');
             $ws4->setCellValue("E{$r4}", $t->account?->name  ?? '-');
-            $ws4->setCellValue("F{$r4}", (float) $t->amount);
+            $ws4->setCellValue("F{$r4}", (float) $t->amount / $exchangeRate);
             $ws4->setCellValue("G{$r4}", $t->transaction_date->format('Y-m'));
             $ws4->setCellValue("H{$r4}", $t->description ?? '');
 
-            $ws4->getStyle("F{$r4}")->getNumberFormat()->setFormatCode('"Rp "#,##0');
+            $ws4->getStyle("F{$r4}")->getNumberFormat()->setFormatCode($currFormat);
 
             $fillBg($ws4, "A{$r4}:H{$r4}", $bg);
             $ws4->getStyle("C{$r4}")->getFont()->setBold(true)->getColor()->setRGB($tc);

@@ -90,6 +90,7 @@ class SearchController extends Controller
                 'target_amount'  => (float) $g->target_amount,
                 'current_amount' => (float) $g->current_amount,
                 'deadline'       => $g->deadline,
+                'is_achieved'    => ((float) $g->target_amount > 0 && (float) $g->current_amount >= (float) $g->target_amount),
             ]);
 
         return response()->json([

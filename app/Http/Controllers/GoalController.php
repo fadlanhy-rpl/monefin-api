@@ -73,13 +73,10 @@ class GoalController extends Controller
             ]);
         });
 
-        $formattedInput = 'Rp ' . number_format($amount, 0, ',', '.');
-        $formattedActual = 'Rp ' . number_format($actualDeposit, 0, ',', '.');
-
         if ($wasCapped) {
-            $message = "Setoran {$formattedInput} disesuaikan menjadi {$formattedActual} karena target tabungan '{$goal->name}' telah tercapai 100%! 🎉";
+            $message = "Setoran disesuaikan karena target tabungan '{$goal->name}' telah tercapai 100%! 🎉";
         } else {
-            $message = "Berhasil menyetor {$formattedActual} ke target tabungan '{$goal->name}'!";
+            $message = "Berhasil menyetor ke target tabungan '{$goal->name}'!";
         }
 
         return response()->json([
