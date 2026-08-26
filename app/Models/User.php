@@ -25,6 +25,7 @@ class User extends Authenticatable
         'occupation',
         'bio',
         'preferences',
+        'two_factor_enabled',
     ];
 
     protected $hidden = [
@@ -46,9 +47,10 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
-            'password'          => 'hashed',
-            'preferences'       => 'array',
+            'email_verified_at'   => 'datetime',
+            'password'            => 'hashed',
+            'preferences'         => 'array',
+            'two_factor_enabled'  => 'boolean',
         ];
     }
 
