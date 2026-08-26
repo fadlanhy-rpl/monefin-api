@@ -2,38 +2,45 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Resources\IncomeSettingResource;
 use App\Models\IncomeSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class IncomeSettingController extends Controller
 {
-    public function show(Request $request): JsonResponse
+    /**
+     * Get all active recurring transactions for the user.
+     */
+    public function index(Request $request): JsonResponse
     {
-        $setting = $request->user()->activeIncomeSetting()->first();
+        $settings = $request->user()->incomeSettings()
+            ->with(['account', 'category'])
+            ->where('is_active', true)
+            ->get();
 
-        if (! $setting) {
-            return response()->json(['data' => null, 'message' => 'Uang saku belum diatur.'], 200);
-        }
-
-        return response()->json(['data' => new IncomeSettingResource($setting)]);
+        return response()->json(['data' => $settings]);
     }
 
+    /**
+     * Store a new recurring transaction.
+     */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
+            'type'           => ['required', 'in:income,expense'],
+            'title'          => ['required', 'string', 'max:255'],
+            'account_id'     => ['nullable', 'exists:accounts,id'],
+            'category_id'    => ['nullable', 'exists:categories,id'],
             'amount'         => ['required', 'numeric', 'min:0.01'],
-            'period_type'    => ['required', 'in:weekly,monthly'],
+            'period_type'    => ['required', 'in:weekly,monthly,daily'],
             'effective_date' => ['nullable', 'date'],
         ]);
 
-        // Nonaktifkan setting sebelumnya
-        IncomeSetting::where('user_id', $request->user()->id)
-            ->where('is_active', true)
-            ->update(['is_active' => false]);
-
         $setting = $request->user()->incomeSettings()->create([
+            'type'           => $validated['type'],
+            'title'          => $validated['title'],
+            'account_id'     => $validated['account_id'] ?? null,
+            'category_id'    => $validated['category_id'] ?? null,
             'amount'         => $validated['amount'],
             'period_type'    => $validated['period_type'],
             'is_active'      => true,
@@ -41,8 +48,53 @@ class IncomeSettingController extends Controller
         ]);
 
         return response()->json([
-            'message' => 'Uang saku berhasil disimpan.',
-            'data'    => new IncomeSettingResource($setting),
+            'message' => 'Transaksi rutin berhasil ditambahkan.',
+            'data'    => $setting->load(['account', 'category']),
         ], 201);
+    }
+
+    /**
+     * Update an existing recurring transaction.
+     */
+    public function update(Request $request, IncomeSetting $incomeSetting): JsonResponse
+    {
+        if ($incomeSetting->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validate([
+            'type'           => ['sometimes', 'in:income,expense'],
+            'title'          => ['sometimes', 'string', 'max:255'],
+            'account_id'     => ['nullable', 'exists:accounts,id'],
+            'category_id'    => ['nullable', 'exists:categories,id'],
+            'amount'         => ['sometimes', 'numeric', 'min:0.01'],
+            'period_type'    => ['sometimes', 'in:weekly,monthly,daily'],
+            'effective_date' => ['nullable', 'date'],
+            'is_active'      => ['sometimes', 'boolean'],
+        ]);
+
+        $incomeSetting->update($validated);
+
+        return response()->json([
+            'message' => 'Transaksi rutin berhasil diperbarui.',
+            'data'    => $incomeSetting->fresh(['account', 'category']),
+        ]);
+    }
+
+    /**
+     * Delete (deactivate) a recurring transaction.
+     */
+    public function destroy(Request $request, IncomeSetting $incomeSetting): JsonResponse
+    {
+        if ($incomeSetting->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $incomeSetting->update(['is_active' => false]);
+        $incomeSetting->delete();
+
+        return response()->json([
+            'message' => 'Transaksi rutin berhasil dihapus.',
+        ]);
     }
 }

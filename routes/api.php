@@ -23,6 +23,8 @@ Route::middleware('throttle:60,1')->group(function () {
     Route::post('/auth/resend-otp',      [AuthController::class, 'resendOtp']);
     Route::post('/auth/forgot-password', [AuthController::class, 'forgotPassword']);
     Route::post('/auth/reset-password',  [AuthController::class, 'resetPassword']);
+    Route::post('/auth/verify-2fa',      [AuthController::class, 'verify2fa']);
+    Route::post('/auth/secure-account',  [AuthController::class, 'secureAccount']);
 });
 
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
@@ -42,6 +44,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/auth/profile',  [AuthController::class, 'updateProfile']);
     Route::post('/auth/password', [AuthController::class, 'updatePassword']);
     Route::delete('/auth/profile', [AuthController::class, 'destroy']);
+
+    // Two-Factor Authentication
+    Route::post('/auth/2fa/toggle', [AuthController::class, 'toggle2fa']);
+
+    // Sessions
+    Route::get('/auth/sessions',                 [AuthController::class, 'getSessions']);
+    Route::delete('/auth/sessions',              [AuthController::class, 'revokeOtherSessions']);
+    Route::delete('/auth/sessions/{tokenId}',    [AuthController::class, 'revokeSession']);
 
     // Backward-compatible aliases
     Route::post('/logout', [AuthController::class, 'logout']);
@@ -69,9 +79,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('goals/{goal}/withdraw', [GoalController::class, 'withdraw']);
     Route::apiResource('goals', GoalController::class);
 
-    // Income Settings
-    Route::get('/income-settings',  [IncomeSettingController::class, 'show']);
+    // Income Settings (Recurring Transactions)
+    Route::get('/income-settings',  [IncomeSettingController::class, 'index']);
     Route::post('/income-settings', [IncomeSettingController::class, 'store']);
+    Route::put('/income-settings/{incomeSetting}', [IncomeSettingController::class, 'update']);
+    Route::delete('/income-settings/{incomeSetting}', [IncomeSettingController::class, 'destroy']);
 
     // Spending Thresholds
     Route::get('/spending-thresholds',  [SpendingThresholdController::class, 'show']);

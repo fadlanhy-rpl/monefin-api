@@ -3,19 +3,23 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\NewLoginAlertMail;
 use App\Mail\SendOtpMail;
+use App\Mail\SuspiciousLoginMail;
 use App\Models\OtpCode;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Laravel\Socialite\Facades\Socialite;
 
@@ -72,12 +76,134 @@ class AuthController extends Controller
 
         RateLimiter::clear($throttleKey);
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        // Cek Two-Factor Authentication
+        if ($user->two_factor_enabled) {
+            if ($penaltyResponse = $this->checkOtpPenalty($user->email)) {
+                return $penaltyResponse;
+            }
+
+            OtpCode::where('email', $user->email)->where('type', '2fa')->delete();
+            $otp = rand(100000, 999999);
+            OtpCode::create([
+                'email'      => $user->email,
+                'code'       => $otp,
+                'type'       => '2fa',
+                'expires_at' => Carbon::now()->addMinutes(5),
+            ]);
+
+            try {
+                Mail::to($user->email)->send(new SendOtpMail($otp, '2fa'));
+            } catch (\Exception $e) {
+                Log::error('Mail Error (2FA): ' . $e->getMessage());
+                return response()->json(['message' => 'Gagal mengirim kode 2FA. Silakan coba lagi.'], 500);
+            }
+
+            return response()->json([
+                'require_2fa' => true,
+                'email'       => $user->email,
+                'message'     => 'Kode verifikasi dikirim ke email Anda.',
+            ]);
+        }
+
+        $token = $this->createToken($user, $request);
 
         return response()->json([
             'data'    => ['user' => $user, 'token' => $token],
             'message' => 'Login berhasil.',
         ]);
+    }
+
+    /**
+     * Helper: buat Sanctum token dengan info device
+     * Update menggunakan ID token langsung agar tidak salah target.
+     */
+    private function createToken(User $user, Request $request): string
+    {
+        $deviceName  = $this->detectDevice($request);
+        
+        // Hapus sesi lama di browser/device yang persis sama agar tidak menumpuk, catat revoker di Cache
+        $oldTokens = $user->tokens()->where('name', $deviceName)->get();
+        $revokerDetails = [
+            'device' => $deviceName,
+            'ip'     => $request->ip() ?: 'IP tidak tersimpan',
+            'time'   => now()->translatedFormat('d M Y, H:i')
+        ];
+        foreach ($oldTokens as $oldT) {
+            Cache::put('revoked_' . $oldT->token, $revokerDetails, now()->addDay());
+            $oldT->delete();
+        }
+
+        $tokenResult = $user->createToken($deviceName);
+
+        // Update menggunakan ID — dijamin akurat, tidak bisa salah token
+        $tokenResult->accessToken->forceFill([
+            'device_name' => $deviceName,
+            'ip_address'  => $request->ip(),
+            'user_agent'  => $request->userAgent(),
+        ])->save();
+
+        // Buat action token untuk pengamanan akun jika login bukan oleh pemilik
+        $actionToken = Str::random(64);
+        Cache::put('secure_login_token_' . $actionToken, [
+            'token_id'    => $tokenResult->accessToken->id,
+            'user_id'     => $user->id,
+            'email'       => $user->email,
+            'device_name' => $deviceName,
+            'ip_address'  => $request->ip(),
+            'login_time'  => now()->translatedFormat('d M Y, H:i'),
+        ], now()->addDays(2));
+
+        // Kirim email peringatan login baru ke user
+        try {
+            Mail::to($user->email)->send(new NewLoginAlertMail(
+                $user->name,
+                $user->email,
+                $deviceName,
+                $request->ip() ?: 'IP tidak tersimpan',
+                now()->translatedFormat('d M Y, H:i'),
+                $actionToken
+            ));
+        } catch (\Exception $e) {
+            Log::error('Mail Error (New Login Alert): ' . $e->getMessage());
+        }
+
+        return $tokenResult->plainTextToken;
+    }
+
+    private function detectDevice(Request $request): string
+    {
+        $ua = $request->userAgent() ?? '';
+
+        if (str_contains($ua, 'Mobile') || str_contains($ua, 'Android') || str_contains($ua, 'iPhone')) {
+            $device = 'Mobile';
+        } else {
+            $device = 'Desktop';
+        }
+
+        // Urutan deteksi browser sangat penting karena string User-Agent sering mengandung nama browser lain.
+        // Contoh: Edge berbasis Chromium memiliki "Chrome" dan "Edg" di dalamnya.
+        if (str_contains($ua, 'Edg')) {
+            $browser = 'Edge';
+        } elseif (str_contains($ua, 'OPR') || str_contains($ua, 'Opera')) {
+            $browser = 'Opera';
+        } elseif (str_contains($ua, 'Chrome')) {
+            $browser = 'Chrome';
+        } elseif (str_contains($ua, 'Firefox')) {
+            $browser = 'Firefox';
+        } elseif (str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome')) {
+            $browser = 'Safari';
+        } else {
+            $browser = 'Browser';
+        }
+
+        if (str_contains($ua, 'Windows'))        $os = 'Windows';
+        elseif (str_contains($ua, 'Macintosh'))  $os = 'Mac';
+        elseif (str_contains($ua, 'Linux'))      $os = 'Linux';
+        elseif (str_contains($ua, 'Android'))    $os = 'Android';
+        elseif (str_contains($ua, 'iPhone'))     $os = 'iPhone';
+        else                                     $os = 'Unknown OS';
+
+        return "{$browser} on {$os} ({$device})";
     }
 
     // =========================================================
@@ -131,7 +257,7 @@ class AuthController extends Controller
             'email'      => $user->email,
             'code'       => $otp,
             'type'       => 'verification',
-            'expires_at' => Carbon::now()->addMinutes(10),
+            'expires_at' => Carbon::now()->addMinutes(5),
         ]);
 
         try {
@@ -201,7 +327,7 @@ class AuthController extends Controller
      * Handle callback dari Google
      * GET /api/auth/google/callback
      */
-    public function handleGoogleCallback()
+    public function handleGoogleCallback(Request $request)
     {
         try {
             /** @var \Laravel\Socialite\Two\AbstractProvider $driver */
@@ -234,8 +360,39 @@ class AuthController extends Controller
                 }
             }
 
-            $token       = $user->createToken('auth_token')->plainTextToken;
             $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+
+            // Jika user mengaktifkan 2FA, kirim OTP dan redirect ke halaman verifikasi
+            if ($user->two_factor_enabled) {
+                if ($penaltyResponse = $this->checkOtpPenalty($user->email)) {
+                    $errorMsg = json_decode($penaltyResponse->getContent())->message;
+                    return redirect(
+                        $frontendUrl . '/login?error=' . urlencode($errorMsg)
+                    );
+                }
+
+                OtpCode::where('email', $user->email)->where('type', '2fa')->delete();
+                $otp = rand(100000, 999999);
+                OtpCode::create([
+                    'email'      => $user->email,
+                    'code'       => $otp,
+                    'type'       => '2fa',
+                    'expires_at' => Carbon::now()->addMinutes(5),
+                ]);
+
+                try {
+                    Mail::to($user->email)->send(new SendOtpMail($otp, '2fa'));
+                } catch (\Exception $e) {
+                    Log::error('Mail Error (Google 2FA): ' . $e->getMessage());
+                }
+
+                return redirect(
+                    $frontendUrl . '/verify-2fa?email=' . urlencode($user->email)
+                );
+            }
+
+            // Normal flow: langsung buat token dengan info device
+            $token = $this->createToken($user, $request);
 
             return redirect($frontendUrl . '/auth/callback?token=' . $token);
 
@@ -386,7 +543,7 @@ class AuthController extends Controller
         $otpRecord->delete();
 
         // Auto-login setelah verifikasi
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $token = $this->createToken($user, $request);
 
         return response()->json([
             'data'    => ['user' => $user->fresh(), 'token' => $token],
@@ -406,8 +563,12 @@ class AuthController extends Controller
     {
         $request->validate([
             'email' => 'required|email',
-            'type'  => 'required|in:verification,reset',
+            'type'  => 'required|in:verification,reset,2fa',
         ]);
+
+        if ($penaltyResponse = $this->checkOtpPenalty($request->email)) {
+            return $penaltyResponse;
+        }
 
         $user = User::where('email', $request->email)->first();
 
@@ -422,7 +583,7 @@ class AuthController extends Controller
             'email'      => $request->email,
             'code'       => $otp,
             'type'       => $request->type,
-            'expires_at' => Carbon::now()->addMinutes(10),
+            'expires_at' => Carbon::now()->addMinutes(5),
         ]);
 
         try {
@@ -465,7 +626,7 @@ class AuthController extends Controller
             'email'      => $request->email,
             'code'       => $otp,
             'type'       => 'reset',
-            'expires_at' => Carbon::now()->addMinutes(10),
+            'expires_at' => Carbon::now()->addMinutes(5),
         ]);
 
         try {
@@ -540,4 +701,328 @@ class AuthController extends Controller
             'message' => 'Akun dan seluruh data berhasil dihapus secara permanen.',
         ]);
     }
+
+    // =========================================================
+    // TWO-FACTOR AUTHENTICATION
+    // =========================================================
+
+    /**
+     * POST /api/auth/verify-2fa
+     * Body: { email, otp }
+     */
+    public function verify2fa(Request $request): JsonResponse
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'otp'   => 'required|string|size:6',
+        ]);
+
+        if ($penaltyResponse = $this->checkOtpPenalty($request->email)) {
+            return $penaltyResponse;
+        }
+
+        $otpRecord = OtpCode::where('email', $request->email)
+            ->where('code', $request->otp)
+            ->where('type', '2fa')
+            ->where('expires_at', '>', Carbon::now())
+            ->first();
+
+        if (!$otpRecord) {
+            return $this->handleFailedOtp($request->email);
+        }
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'User tidak ditemukan.'], 404);
+        }
+
+        $otpRecord->delete();
+
+        // Bersihkan cache counter gagal jika berhasil login
+        Cache::forget("otp_fails_{$request->email}");
+        Cache::forget("otp_penalty_{$request->email}");
+
+        $token = $this->createToken($user, $request);
+
+        return response()->json([
+            'data'    => ['user' => $user->fresh(), 'token' => $token],
+            'message' => 'Verifikasi 2FA berhasil. Selamat datang!',
+        ]);
+    }
+
+    /**
+     * POST /api/auth/2fa/toggle
+     * Body: { enabled: boolean }
+     */
+    public function toggle2fa(Request $request): JsonResponse
+    {
+        $request->validate([
+            'enabled' => 'required|boolean',
+        ]);
+
+        $user = $request->user();
+        $user->update(['two_factor_enabled' => $request->enabled]);
+
+        return response()->json([
+            'data'    => ['user' => $user->fresh()],
+            'message' => $request->enabled
+                ? 'Two-Factor Authentication berhasil diaktifkan.'
+                : 'Two-Factor Authentication berhasil dinonaktifkan.',
+        ]);
+    }
+
+    // =========================================================
+    // SESSIONS
+    // =========================================================
+
+    /**
+     * GET /api/auth/sessions
+     */
+    public function getSessions(Request $request): JsonResponse
+    {
+        $user         = $request->user();
+        $currentToken = $user->currentAccessToken();
+
+        $sessions = $user->tokens()
+            ->orderByDesc('last_used_at')
+            ->get()
+            ->map(function ($token) use ($currentToken) {
+                // Token lama (sebelum migrasi) memiliki name = 'auth_token' dan device_name = null
+                // Tampilkan label yang lebih informatif
+                $deviceLabel = $token->device_name;
+                if (!$deviceLabel) {
+                    $deviceLabel = ($token->name && $token->name !== 'auth_token')
+                        ? $token->name
+                        : 'Sesi Lama (Browser Tidak Diketahui)';
+                }
+
+                return [
+                    'id'          => $token->id,
+                    'device_name' => $deviceLabel,
+                    'ip_address'  => $token->ip_address ?: 'IP tidak tersimpan',
+                    'last_used_at'=> $token->last_used_at,
+                    'created_at'  => $token->created_at,
+                    'is_current'  => $token->id === $currentToken->id,
+                    'is_legacy'   => !$token->device_name, // flag untuk token lama
+                ];
+            });
+
+        return response()->json([
+            'data'    => ['sessions' => $sessions],
+            'message' => 'Sessions fetched successfully.',
+        ]);
+    }
+
+    /**
+     * DELETE /api/auth/sessions/{tokenId}
+     */
+    public function revokeSession(Request $request, int $tokenId): JsonResponse
+    {
+        $user         = $request->user();
+        $currentToken = $user->currentAccessToken();
+
+        if ($currentToken->id === $tokenId) {
+            return response()->json(['message' => 'Tidak dapat menghapus sesi aktif Anda sendiri.'], 400);
+        }
+
+        $tokenToDelete = $user->tokens()->where('id', $tokenId)->first();
+
+        if (!$tokenToDelete) {
+            return response()->json(['message' => 'Sesi tidak ditemukan.'], 404);
+        }
+
+        // Simpan info siapa yang mencabut token ini menggunakan hash token sebagai key
+        $revokerDetails = [
+            'device' => $currentToken->device_name ?: 'Perangkat Tidak Diketahui',
+            'ip'     => $currentToken->ip_address ?: 'IP tidak tersimpan',
+            'time'   => now()->translatedFormat('d M Y, H:i')
+        ];
+        Cache::put('revoked_' . $tokenToDelete->token, $revokerDetails, now()->addDay());
+
+        $tokenToDelete->delete();
+
+        return response()->json(['message' => 'Sesi berhasil dikeluarkan.']);
+    }
+
+    /**
+     * DELETE /api/auth/sessions — revoke all OTHER sessions
+     */
+    public function revokeOtherSessions(Request $request): JsonResponse
+    {
+        $user         = $request->user();
+        $currentToken = $user->currentAccessToken();
+
+        $tokensToDelete = $user->tokens()->where('id', '!=', $currentToken->id)->get();
+
+        $revokerDetails = [
+            'device' => $currentToken->device_name ?: 'Perangkat Tidak Diketahui',
+            'ip'     => $currentToken->ip_address ?: 'IP tidak tersimpan',
+            'time'   => now()->translatedFormat('d M Y, H:i')
+        ];
+
+        foreach ($tokensToDelete as $tokenToDel) {
+            Cache::put('revoked_' . $tokenToDel->token, $revokerDetails, now()->addDay());
+            $tokenToDel->delete();
+        }
+
+        return response()->json(['message' => 'Semua sesi lain berhasil dikeluarkan.']);
+    }
+
+    // =========================================================
+    // OTP PENALTY HELPERS
+    // =========================================================
+
+    /**
+     * Mengecek apakah email dikenakan penalty.
+     * Jika ya, mengembalikan response JSON error dengan sisa waktu.
+     * Jika tidak, mengembalikan null.
+     */
+    private function checkOtpPenalty(string $email): ?JsonResponse
+    {
+        $penaltyKey = "otp_penalty_{$email}";
+        if (Cache::has($penaltyKey)) {
+            $unblockAt = Cache::get($penaltyKey);
+            $unblockTime = Carbon::parse($unblockAt);
+            
+            if (Carbon::now()->lessThan($unblockTime)) {
+                $minutesLeft = Carbon::now()->diffInMinutes($unblockTime) + 1;
+                
+                // Format pesan waktu
+                if ($minutesLeft >= 60) {
+                    $hours = ceil($minutesLeft / 60);
+                    $timeString = $hours . ' jam';
+                } else {
+                    $timeString = $minutesLeft . ' menit';
+                }
+                
+                return response()->json([
+                    'message' => "Sisa percobaan Anda telah habis. Silakan tunggu {$timeString} untuk meminta atau mengirim ulang kode OTP baru."
+                ], 429);
+            } else {
+                Cache::forget($penaltyKey);
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * Menangani percobaan OTP yang gagal. 
+     * Akan menaikkan counter dan menerapkan penalty jika limit tercapai.
+     */
+    private function handleFailedOtp(string $email): JsonResponse
+    {
+        $failsKey = "otp_fails_{$email}";
+        $currentFails = (int) Cache::get($failsKey, 0);
+        $fails = $currentFails + 1;
+        Cache::put($failsKey, $fails, Carbon::now()->addHours(24));
+
+        // Tentukan kelipatan penalti (5, 10, 15, >= 20)
+        if ($fails >= 5 && $fails % 5 === 0) {
+            $penaltyKey = "otp_penalty_{$email}";
+            
+            if ($fails === 5) {
+                $blockUntil = Carbon::now()->addMinutes(5);
+            } elseif ($fails === 10) {
+                $blockUntil = Carbon::now()->addMinutes(15);
+            } elseif ($fails === 15) {
+                $blockUntil = Carbon::now()->addMinutes(30);
+            } else {
+                // Fails >= 20
+                $blockUntil = Carbon::now()->addDay();
+            }
+
+            // Set penalty (simpan sebagai ISO string untuk konsistensi di database cache)
+            Cache::put($penaltyKey, $blockUntil->toIso8601String(), $blockUntil);
+            
+            // Hapus OTP aktif jika ada
+            OtpCode::where('email', $email)->delete();
+
+            // Kirim email peringatan
+            try {
+                Mail::to($email)->send(new SuspiciousLoginMail($email));
+            } catch (\Exception $e) {
+                Log::error('Mail Error (Suspicious Login): ' . $e->getMessage());
+            }
+
+            return $this->checkOtpPenalty($email);
+        }
+
+        $sisa = 5 - ($fails % 5);
+        return response()->json([
+            'message' => "Kode OTP tidak valid atau sudah kadaluarsa. Sisa percobaan: {$sisa}"
+        ], 422);
+    }
+
+    // =========================================================
+    // SECURE ACCOUNT (ONE-CLICK REVOKE & RESET PASSWORD)
+    // =========================================================
+
+    /**
+     * POST /api/auth/secure-account
+     * Body: { token }
+     */
+    public function secureAccount(Request $request): JsonResponse
+    {
+        $request->validate([
+            'token' => 'required|string',
+        ]);
+
+        $actionKey  = 'secure_login_token_' . $request->token;
+        $actionData = Cache::get($actionKey);
+
+        if (!$actionData) {
+            return response()->json([
+                'message' => 'Tautan pengamanan tidak valid atau telah kedaluwarsa.',
+            ], 400);
+        }
+
+        $user = User::find($actionData['user_id']);
+        if (!$user) {
+            return response()->json(['message' => 'User tidak ditemukan.'], 404);
+        }
+
+        // 1. Cabut token sesi penyusup jika masih ada
+        if (!empty($actionData['token_id'])) {
+            $compromisedToken = $user->tokens()->where('id', $actionData['token_id'])->first();
+            if ($compromisedToken) {
+                $revokerDetails = [
+                    'device' => 'Pusat Keamanan (Email)',
+                    'ip'     => $request->ip() ?: 'IP tidak tersimpan',
+                    'time'   => now()->translatedFormat('d M Y, H:i'),
+                ];
+                Cache::put('revoked_' . $compromisedToken->token, $revokerDetails, now()->addDay());
+                $compromisedToken->delete();
+            }
+        }
+
+        // 2. Buatkan OTP Reset Password baru agar pemilik akun bisa langsung ganti password
+        OtpCode::where('email', $user->email)->where('type', 'reset')->delete();
+        $otp = rand(100000, 999999);
+        OtpCode::create([
+            'email'      => $user->email,
+            'code'       => $otp,
+            'type'       => 'reset',
+            'expires_at' => Carbon::now()->addMinutes(15),
+        ]);
+
+        try {
+            Mail::to($user->email)->send(new SendOtpMail($otp, 'reset'));
+        } catch (\Exception $e) {
+            Log::error('Mail Error (Secure Account Reset OTP): ' . $e->getMessage());
+        }
+
+        // 3. Hapus action token agar tidak bisa dipakai berulang kali
+        Cache::forget($actionKey);
+
+        return response()->json([
+            'message' => 'Sesi mencurigakan telah dicabut dan kode OTP ganti password telah dikirim ke email Anda.',
+            'data'    => [
+                'email'       => $user->email,
+                'device_name' => $actionData['device_name'] ?? 'Perangkat Tidak Dikenal',
+            ],
+        ]);
+    }
 }
+

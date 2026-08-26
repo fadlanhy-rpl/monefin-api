@@ -17,7 +17,7 @@ class SendOtpMail extends Mailable
 
     /**
      * @param int|string $otp   Kode OTP 6 digit
-     * @param string     $type  'verification' atau 'reset'
+     * @param string     $type  'verification' | 'reset' | '2fa'
      */
     public function __construct($otp, string $type)
     {
@@ -27,9 +27,14 @@ class SendOtpMail extends Mailable
 
     public function envelope(): Envelope
     {
-        $subject = $this->type === 'verification'
-            ? 'Verifikasi Email - ' . config('app.name')
-            : 'Reset Password - ' . config('app.name');
+        $appName = config('app.name');
+
+        $subject = match($this->type) {
+            'verification' => "Verifikasi Email Anda – {$appName}",
+            'reset'        => "Reset Password – {$appName}",
+            '2fa'          => "Kode Keamanan Two-Factor – {$appName}",
+            default        => "Kode OTP – {$appName}",
+        };
 
         return new Envelope(subject: $subject);
     }

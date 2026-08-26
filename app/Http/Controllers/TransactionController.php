@@ -8,6 +8,8 @@ use App\Models\Transaction;
 use App\Services\SpendingAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\BudgetAlertMail;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class TransactionController extends Controller
@@ -98,23 +100,48 @@ class TransactionController extends Controller
                 
                 $percent = ($totalSpent / $budget->limit_amount) * 100;
                 
-                if ($percent >= 80) {
-                    // Check if already sent a budget alert for this category this month
+                $thresholdLevel = null;
+                if ($percent >= 100) {
+                    $thresholdLevel = 100;
+                } elseif ($percent >= 80) {
+                    $thresholdLevel = 80;
+                }
+
+                if ($thresholdLevel) {
+                    // Cek apakah sudah pernah mengirim alert untuk threshold ini di bulan ini
+                    $periodLabel = 'cat_' . $transaction->category_id . '_' . date('Y-m') . '_' . $thresholdLevel;
+                    
                     $existingAlert = \App\Models\SpendingNotification::where('user_id', $request->user()->id)
                         ->where('type', 'budget_alert')
-                        ->where('period_label', 'cat_' . $transaction->category_id . '_' . date('Y-m'))
+                        ->where('period_label', $periodLabel)
                         ->first();
                         
                     if (!$existingAlert) {
+                        $isCritical = $thresholdLevel === 100;
+                        $message = $isCritical
+                            ? 'Peringatan Kritis: Pengeluaran ' . ($transaction->category->name ?? 'Kategori') . ' telah mencapai 100% dari limit bulan ini!'
+                            : 'Peringatan: Pengeluaran ' . ($transaction->category->name ?? 'Kategori') . ' mencapai ' . round($percent) . '% dari limit bulan ini!';
+
                         \App\Models\SpendingNotification::create([
                             'user_id' => $request->user()->id,
                             'type' => 'budget_alert',
                             'period_type' => 'monthly',
-                            'period_label' => 'cat_' . $transaction->category_id . '_' . date('Y-m'),
+                            'period_label' => $periodLabel,
                             'spent_percent' => $percent,
-                            'message' => 'Peringatan: Pengeluaran ' . ($transaction->category->name ?? 'Kategori') . ' mencapai ' . round($percent) . '% dari limit bulan ini!',
+                            'message' => $message,
                             'is_read' => false,
                         ]);
+
+                        // Kirim Email secara asynchronous (queue) jika queue terkonfigurasi, atau jalankan saat itu juga
+                        Mail::to($request->user()->email)->send(
+                            new BudgetAlertMail(
+                                $request->user()->name,
+                                $transaction->category->name ?? 'Tanpa Kategori',
+                                $percent,
+                                $totalSpent,
+                                $budget->limit_amount
+                            )
+                        );
                     }
                 }
             }

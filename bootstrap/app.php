@@ -19,4 +19,23 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*'),
         );
+
+        $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, Request $request) {
+            if ($request->is('api/*')) {
+                $token = $request->bearerToken();
+                if ($token) {
+                    $tokenParts = explode('|', $token, 2);
+                    $plainTextToken = count($tokenParts) === 2 ? $tokenParts[1] : $tokenParts[0];
+                    $hashed = hash('sha256', $plainTextToken);
+                    
+                    $revokedDetails = \Illuminate\Support\Facades\Cache::get('revoked_' . $hashed);
+                    if ($revokedDetails) {
+                        return response()->json([
+                            'message' => 'Unauthenticated.',
+                            'revoked_by' => $revokedDetails
+                        ], 401);
+                    }
+                }
+            }
+        });
     })->create();
