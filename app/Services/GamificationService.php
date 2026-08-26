@@ -153,7 +153,14 @@ class GamificationService
             $streakUpdated = true;
             $this->awardXP($user, 15, 'Aktivitas Harian Pertama');
         } elseif ($lastDate->equalTo($today)) {
-            // Sudah aktif hari ini, tidak perlu update streak
+            // Sudah aktif hari ini, lewati update untuk performa instan
+            return [
+                'current_streak' => $profile->current_streak,
+                'longest_streak' => $profile->longest_streak,
+                'streak_updated' => false,
+                'freeze_used'    => false,
+                'freezes_left'   => $profile->streak_freezes_available,
+            ];
         } elseif ($lastDate->equalTo($today->copy()->subDay())) {
             // Aktif kemarin (streak berlanjut)
             $profile->current_streak += 1;
@@ -185,8 +192,10 @@ class GamificationService
 
         $profile->save();
 
-        // Evaluasi Achievement Streak
-        $this->evaluateStreakAchievements($user, $profile->current_streak);
+        // Evaluasi Achievement Streak hanya jika ada perubahan
+        if ($streakUpdated) {
+            $this->evaluateStreakAchievements($user, $profile->current_streak);
+        }
 
         return [
             'current_streak' => $profile->current_streak,
