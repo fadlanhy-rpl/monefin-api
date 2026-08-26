@@ -13,6 +13,7 @@ use App\Http\Controllers\SpendingController;
 use App\Http\Controllers\SpendingThresholdController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TrashController;
+use App\Http\Controllers\SplitBillController;
 use App\Http\Controllers\Api\GamificationController;
 use Illuminate\Support\Facades\Route;
 
@@ -117,4 +118,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/gamification/achievements',       [GamificationController::class, 'achievements']);
     Route::get('/gamification/quests',             [GamificationController::class, 'quests']);
     Route::post('/gamification/quests/{id}/claim', [GamificationController::class, 'claimQuest']);
+
+    // Split Bills (Pembagian Tagihan)
+    Route::get('/split-bills',                                           [SplitBillController::class, 'index']);
+    Route::post('/split-bills',                                          [SplitBillController::class, 'store']);
+    Route::post('/split-bills/calculate-preview',                        [SplitBillController::class, 'calculatePreview']);
+    Route::get('/split-bills/{id}',                                      [SplitBillController::class, 'show']);
+    Route::delete('/split-bills/{id}',                                   [SplitBillController::class, 'destroy']);
+    Route::post('/split-bills/{id}/participants/{participantId}/pay',    [SplitBillController::class, 'markPayment']);
+    Route::post('/split-bills/{id}/record-expense',                      [SplitBillController::class, 'recordExpense']);
+    Route::get('/split-bills/{id}/whatsapp-text',                       [SplitBillController::class, 'whatsappText']);
 });
