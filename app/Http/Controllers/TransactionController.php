@@ -14,7 +14,10 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class TransactionController extends Controller
 {
-    public function __construct(private SpendingAnalysisService $spending) {}
+    public function __construct(
+        private SpendingAnalysisService $spending,
+        private \App\Services\GamificationService $gamification
+    ) {}
 
     /**
      * List transaksi dengan filter: tanggal, kategori, akun, tipe, pencarian teks.
@@ -145,6 +148,22 @@ class TransactionController extends Controller
                     }
                 }
             }
+        }
+
+        // Gamifikasi triggers
+        try {
+            $user = $request->user();
+            $this->gamification->awardXP($user, 10, 'Mencatat Transaksi');
+            $this->gamification->recordActivity($user);
+            $this->gamification->recordQuestAction($user, 'record_transactions', 1);
+            $this->gamification->updateAchievementProgress($user, 'first_tx', 1);
+
+            $totalTxCount = Transaction::where('user_id', $user->id)->count();
+            $this->gamification->updateAchievementProgress($user, 'tx_10', $totalTxCount);
+            $this->gamification->updateAchievementProgress($user, 'tx_50', $totalTxCount);
+            $this->gamification->updateAchievementProgress($user, 'tx_100', $totalTxCount);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Tx): ' . $e->getMessage());
         }
 
         return response()->json([

@@ -13,6 +13,7 @@ use App\Http\Controllers\SpendingController;
 use App\Http\Controllers\SpendingThresholdController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TrashController;
+use App\Http\Controllers\Api\GamificationController;
 use Illuminate\Support\Facades\Route;
 
 // ─── Public Auth Routes (rate limited) ───────────────────────────────────────
@@ -110,4 +111,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Global Search
     Route::get('/search', [SearchController::class, 'index']);
+
+    // Gamification & Rewards
+    Route::get('/gamification/summary',            [GamificationController::class, 'summary']);
+    Route::get('/gamification/achievements',       [GamificationController::class, 'achievements']);
+    Route::get('/gamification/quests',             [GamificationController::class, 'quests']);
+    Route::post('/gamification/quests/{id}/claim', [GamificationController::class, 'claimQuest']);
 });

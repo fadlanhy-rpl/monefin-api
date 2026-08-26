@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Resources\GoalResource;
 use App\Models\Account;
 use App\Models\Goal;
-use App\Models\Transaction;
+use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -13,6 +13,10 @@ use Illuminate\Support\Facades\DB;
 
 class GoalController extends Controller
 {
+    public function __construct(
+        private GamificationService $gamification
+    ) {}
+
     public function index(Request $request): AnonymousResourceCollection
     {
         $goals = $request->user()->goals()->orderByDesc('is_pinned')->latest()->get();
@@ -79,6 +83,27 @@ class GoalController extends Controller
             $message = "Berhasil menyetor ke target tabungan '{$goal->name}'!";
         }
 
+        // Gamifikasi triggers
+        try {
+            $user = $request->user();
+            $this->gamification->awardXP($user, 25, "Setor Tabungan: {$goal->name}");
+            $this->gamification->recordActivity($user);
+            $this->gamification->recordQuestAction($user, 'deposit_goal', 1);
+            $this->gamification->updateAchievementProgress($user, 'first_deposit', 1);
+
+            $freshGoal = $goal->fresh();
+            if ($freshGoal->current_amount >= $freshGoal->target_amount) {
+                $this->gamification->awardXP($user, 200, "Target Tercapai 100%: {$goal->name} 🎉");
+                $completedCount = Goal::where('user_id', $user->id)
+                    ->whereColumn('current_amount', '>=', 'target_amount')
+                    ->count();
+                $this->gamification->updateAchievementProgress($user, 'goal_completed_1', $completedCount);
+                $this->gamification->updateAchievementProgress($user, 'goal_completed_3', $completedCount);
+            }
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Deposit Goal): ' . $e->getMessage());
+        }
+
         return response()->json([
             'message'    => $message,
             'was_capped' => $wasCapped,
@@ -143,6 +168,15 @@ class GoalController extends Controller
         ]);
 
         $goal = $request->user()->goals()->create($validated);
+
+        try {
+            $user = $request->user();
+            $this->gamification->awardXP($user, 50, "Membuat Target Tabungan: {$goal->name}");
+            $this->gamification->recordActivity($user);
+            $this->gamification->updateAchievementProgress($user, 'first_goal', 1);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Goal): ' . $e->getMessage());
+        }
 
         return response()->json([
             'message' => 'Goal berhasil dibuat.',

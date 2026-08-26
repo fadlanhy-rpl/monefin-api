@@ -100,4 +100,19 @@ class User extends Authenticatable
     {
         return $this->hasMany(SpendingNotification::class);
     }
+
+    public function gamification(): HasOne
+    {
+        return $this->hasOne(UserGamification::class);
+    }
+
+    public function userAchievements(): HasMany
+    {
+        return $this->hasMany(UserAchievement::class);
+    }
+
+    public function userQuests(): HasMany
+    {
+        return $this->hasMany(UserQuest::class);
+    }
 }

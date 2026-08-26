@@ -782,6 +782,16 @@ class AuthController extends Controller
         $user = $request->user();
         $user->update(['two_factor_enabled' => $request->enabled]);
 
+        if ($request->enabled) {
+            try {
+                $gamification = app(\App\Services\GamificationService::class);
+                $gamification->awardXP($user, 75, 'Aktivasi Two-Factor Authentication');
+                $gamification->updateAchievementProgress($user, 'security_2fa', 1);
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Gamification Error (2FA toggle): ' . $e->getMessage());
+            }
+        }
+
         return response()->json([
             'data'    => ['user' => $user->fresh()],
             'message' => $request->enabled
