@@ -237,14 +237,27 @@ class SplitBillController extends Controller
 
         $text = $this->splitBillService->generateWhatsAppMessage($splitBill, $targetParticipant);
 
+        $phone = $targetParticipant?->phone_number;
+        $whatsappUrl = "https://wa.me/?text=" . rawurlencode($text);
+
+        if (!empty($phone)) {
+            $cleanPhone = preg_replace('/[^0-9]/', '', $phone);
+            if (str_starts_with($cleanPhone, '0')) {
+                $cleanPhone = '62' . substr($cleanPhone, 1);
+            } elseif (str_starts_with($cleanPhone, '8')) {
+                $cleanPhone = '62' . $cleanPhone;
+            }
+            if (!empty($cleanPhone)) {
+                $whatsappUrl = "https://wa.me/{$cleanPhone}?text=" . rawurlencode($text);
+            }
+        }
+
         return response()->json([
             'status' => 'success',
             'data'   => [
                 'text'          => $text,
                 'phone_number'  => $targetParticipant?->phone_number,
-                'whatsapp_url'  => $targetParticipant?->phone_number 
-                    ? "https://wa.me/" . preg_replace('/[^0-9]/', '', $targetParticipant->phone_number) . "?text=" . urlencode($text)
-                    : "https://wa.me/?text=" . urlencode($text),
+                'whatsapp_url'  => $whatsappUrl,
             ],
         ]);
     }

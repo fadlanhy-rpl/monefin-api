@@ -419,7 +419,7 @@ class SplitBillService
             }
 
             $text .= $paymentText;
-            $text .= "\n\nKalau sudah transfer, tolong kabari ya. Terima kasih banyak! 🙏";
+            $text .= "\n\nKalau sudah transfer, tolong kabari ya. Terima kasih banyak!";
             return $text;
         }
 
@@ -438,7 +438,7 @@ class SplitBillService
         }
 
         $text .= $paymentText;
-        $text .= "\n\nJika sudah transfer, mohon konfirmasi ya. Terima kasih semuanya! 🙏";
+        $text .= "\n\nJika sudah transfer, mohon konfirmasi ya. Terima kasih semuanya!";
 
         return $text;
     }
