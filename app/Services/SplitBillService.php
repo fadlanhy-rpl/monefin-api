@@ -380,7 +380,7 @@ class SplitBillService
     }
 
     /**
-     * Generate Teks Tagihan WhatsApp Terformat Cantik
+     * Generate Teks Tagihan WhatsApp Terformat Natural, Santun & Profesional
      */
     public function generateWhatsAppMessage(SplitBill $splitBill, ?SplitBillParticipant $targetParticipant = null): string
     {
@@ -394,49 +394,51 @@ class SplitBillService
             $bank = $info['bank_name'] ?? 'Transfer';
             $accNo = $info['account_number'] ?? '-';
             $holder = $info['account_holder'] ?? '';
-            $paymentText = "\n💳 *Transfer Pembayaran:*\n{$bank}: `{$accNo}`" . ($holder ? " (a.n. {$holder})" : "");
+            $paymentText = "\nPembayaran bisa ditransfer ke:\n*{$bank}*: `{$accNo}`" . ($holder ? " (a.n. {$holder})" : "");
         }
 
-        // Jika ditargetkan ke 1 partisipan spesifik
+        // Pesan Personal (1 Orang)
         if ($targetParticipant) {
             $amountFormatted = "Rp " . number_format($targetParticipant->amount_owed, 0, ',', '.');
             
-            $text = "Halo *{$targetParticipant->name}*! 👋\n\n";
-            $text .= "Berikut rincian tagihan untuk *{$title}* ({$date}):\n";
-            $text .= "🏷️ *Total Bagianmu:* *{$amountFormatted}*\n";
+            $text = "Halo {$targetParticipant->name},\n\n";
+            $text .= "Berikut rincian patungan untuk *{$title}* ({$date}) ya:\n";
+            $text .= "• Total bagianmu: *{$amountFormatted}*\n";
 
             // Jika mode itemized, cantumkan menu yang dipesan
             if ($splitBill->split_mode === 'itemized') {
                 $myItems = $targetParticipant->items;
                 if ($myItems->isNotEmpty()) {
-                    $text .= "\n🍽️ *Pesananmu:*\n";
+                    $text .= "\nMenu pesananmu:\n";
                     foreach ($myItems as $item) {
                         $fraction = $item->pivot->split_fraction ?? 1.0;
                         $itemPrice = $item->subtotal * $fraction;
-                        $text .= "- {$item->name}: Rp " . number_format($itemPrice, 0, ',', '.') . "\n";
+                        $text .= "• {$item->name}: Rp " . number_format($itemPrice, 0, ',', '.') . "\n";
                     }
                 }
             }
 
             $text .= $paymentText;
-            $text .= "\n\n_Terima kasih banyak ya! ✨_\n_Dicatat otomatis via MoneFin_";
+            $text .= "\n\nKalau sudah transfer, tolong kabari ya. Terima kasih banyak! 🙏";
             return $text;
         }
 
-        // Rincian untuk grup / seluruh partisipan
-        $text = "🧾 *RINCIAN TAGIHAN: {$title}*\n";
-        $text .= "📅 Tanggal: {$date}\n";
-        $text .= "💰 Total Tagihan: *{$totalFormatted}*\n\n";
-        $text .= "👥 *Daftar Pembagian:*\n";
+        // Pesan Rekap Grup (Seluruh Partisipan)
+        $text = "Halo teman-teman,\n\n";
+        $text .= "Berikut rincian patungan untuk *{$title}* ({$date}):\n";
+        $text .= "• Total Tagihan: *{$totalFormatted}*\n\n";
+        $text .= "Rincian Pembagian:\n";
 
+        $idx = 1;
         foreach ($splitBill->participants as $p) {
-            $statusIcon = $p->status === 'paid' ? '✅' : '⏳';
+            $statusLabel = $p->is_creator ? '(sudah ditalangi)' : ($p->status === 'paid' ? '[Lunas]' : '[Belum Transfer]');
             $amount = "Rp " . number_format($p->amount_owed, 0, ',', '.');
-            $text .= "{$statusIcon} *{$p->name}*: {$amount}" . ($p->is_creator ? ' (Talangi/Saya)' : '') . "\n";
+            $text .= "{$idx}. *{$p->name}*: {$amount} {$statusLabel}\n";
+            $idx++;
         }
 
         $text .= $paymentText;
-        $text .= "\n\n_Mohon konfirmasi jika sudah transfer ya. Terima kasih! 🙏_\n_Dikelola dengan MoneFin_";
+        $text .= "\n\nJika sudah transfer, mohon konfirmasi ya. Terima kasih semuanya! 🙏";
 
         return $text;
     }
