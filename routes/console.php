@@ -10,3 +10,5 @@ Artisan::command('inspire', function () {
 
 Schedule::command('transactions:process-recurring')->daily();
 Schedule::command('notifications:prune-old')->daily();
+Schedule::command('trash:prune-old')->daily();
+

@@ -131,17 +131,32 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/split-bills/{id}/record-expense',                      [SplitBillController::class, 'recordExpense']);
     Route::get('/split-bills/{id}/whatsapp-text',                       [SplitBillController::class, 'whatsappText']);
 
-    // ── AI Features (rate limited: 20 requests / minute per user) ─────────────
-    Route::middleware('throttle:20,1')->prefix('ai')->group(function () {
-        Route::post('/chat',                    [AiController::class, 'chat']);
-        Route::post('/chat/stream',             [AiController::class, 'stream']);
-        Route::post('/suggest-category',        [AiController::class, 'suggestCategory']);
-        Route::get('/budget-recommendations',   [AiController::class, 'budgetRecommendations']);
-        Route::get('/insights',                 [AiController::class, 'insights']);
-        Route::get('/test-connection',          [AiController::class, 'testConnection']);
-        Route::get('/providers',                [AiController::class, 'providers']);
-        Route::post('/reveal-key',              [AiController::class, 'revealKey']);
-        Route::post('/save-config',             [AiController::class, 'saveConfig']);
+    // ── AI Features — rate limited per-feature per user ───────────────────────
+    Route::prefix('ai')->group(function () {
+        // Chat & streaming — paling berat (panggil AI provider), 5 req/menit
+        Route::middleware('throttle:ai-chat')->group(function () {
+            Route::post('/chat',        [AiController::class, 'chat']);
+            Route::post('/chat/stream', [AiController::class, 'stream']);
+        });
+
+        // Suggest category — lebih ringan (ada keyword fallback), 15 req/menit
+        Route::middleware('throttle:ai-suggest')->group(function () {
+            Route::post('/suggest-category', [AiController::class, 'suggestCategory']);
+        });
+
+        // Test connection — hanya saat setup, 3x per 10 menit
+        Route::middleware('throttle:ai-connection-test')->group(function () {
+            Route::get('/test-connection', [AiController::class, 'testConnection']);
+        });
+
+        // Endpoint lainnya — limit umum 20 req/menit
+        Route::middleware('throttle:20,1')->group(function () {
+            Route::get('/budget-recommendations', [AiController::class, 'budgetRecommendations']);
+            Route::get('/insights',               [AiController::class, 'insights']);
+            Route::get('/providers',              [AiController::class, 'providers']);
+            Route::post('/reveal-key',            [AiController::class, 'revealKey']);
+            Route::post('/save-config',           [AiController::class, 'saveConfig']);
+        });
     });
 
     // ── Smart Insights (contextual, per-page, dual-mode) ────────────────────────

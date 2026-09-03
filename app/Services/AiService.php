@@ -8,8 +8,10 @@ use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Ai\AiProviderFactory;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
+
 
 class AiService
 {
@@ -291,6 +293,13 @@ class AiService
     }
 
     private function buildUserContext(User $user): array
+    {
+        // Cache 2 menit — data keuangan user jarang berubah dalam hitungan detik.
+        // Di-invalidate otomatis oleh ProcessTransactionSideEffects job saat ada transaksi baru.
+        return Cache::remember("ai_context:{$user->id}", 120, fn () => $this->buildUserContextRaw($user));
+    }
+
+    private function buildUserContextRaw(User $user): array
     {
         $now        = Carbon::now();
         $startMonth = $now->copy()->startOfMonth()->toDateString();
