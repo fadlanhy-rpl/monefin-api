@@ -9,11 +9,19 @@ use App\Models\UserAchievement;
 use App\Models\FinancialQuest;
 use App\Models\UserQuest;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class GamificationService
 {
+    /**
+     * Invalidate cached gamification summary for a user
+     */
+    public function invalidateUserCache(User $user): void
+    {
+        Cache::forget("gamification_summary:{$user->id}");
+    }
     /**
      * Dapatkan profil gamifikasi user, buat baru jika belum ada
      */
@@ -122,6 +130,8 @@ class GamificationService
         if ($leveledUp && $newLevel % 5 === 0) {
             $profile->increment('streak_freezes_available', 1);
         }
+
+        $this->invalidateUserCache($user);
 
         return [
             'awarded_xp'  => $amount,
@@ -303,73 +313,77 @@ class GamificationService
 
             $userQuest->save();
         }
+
+        $this->invalidateUserCache($user);
     }
 
     /**
-     * Dapatkan ringkasan lengkap data gamifikasi user
+     * Dapatkan ringkasan lengkap data gamifikasi user (Cached for 60s)
      */
     public function getSummary(User $user): array
     {
-        $profile = $this->getOrCreateProfile($user);
-        $levelDetails = $this->getLevelDetails($profile->xp);
+        return Cache::remember("gamification_summary:{$user->id}", 60, function () use ($user) {
+            $profile = $this->getOrCreateProfile($user);
+            $levelDetails = $this->getLevelDetails($profile->xp);
 
-        $unlockedBadgesCount = UserAchievement::where('user_id', $user->id)
-            ->where('is_unlocked', true)
-            ->count();
+            $unlockedBadgesCount = UserAchievement::where('user_id', $user->id)
+                ->where('is_unlocked', true)
+                ->count();
 
-        $totalBadgesCount = Achievement::count();
+            $totalBadgesCount = Achievement::count();
 
-        // Ambil 3 badge terbaru yang berhasil dibuka
-        $recentBadges = UserAchievement::where('user_id', $user->id)
-            ->where('is_unlocked', true)
-            ->with('achievement')
-            ->latest('unlocked_at')
-            ->take(3)
-            ->get()
-            ->map(fn($ua) => $ua->achievement);
+            // Ambil 3 badge terbaru yang berhasil dibuka
+            $recentBadges = UserAchievement::where('user_id', $user->id)
+                ->where('is_unlocked', true)
+                ->with('achievement')
+                ->latest('unlocked_at')
+                ->take(3)
+                ->get()
+                ->map(fn($ua) => $ua->achievement);
 
-        // Ambil quest yang aktif dan belum diklaim
-        $today = Carbon::today();
-        $dailyKey = $today->toDateString();
-        $weeklyKey = $today->format('Y-\WW');
+            // Ambil quest yang aktif dan belum diklaim
+            $today = Carbon::today();
+            $dailyKey = $today->toDateString();
+            $weeklyKey = $today->format('Y-\WW');
 
-        $quests = FinancialQuest::where('is_active', true)->get()->map(function ($q) use ($user, $dailyKey, $weeklyKey) {
-            $periodKey = $q->type === 'daily' ? $dailyKey : $weeklyKey;
-            $uq = UserQuest::where('user_id', $user->id)
-                ->where('quest_id', $q->id)
-                ->where('period_key', $periodKey)
-                ->first();
+            $quests = FinancialQuest::where('is_active', true)->get()->map(function ($q) use ($user, $dailyKey, $weeklyKey) {
+                $periodKey = $q->type === 'daily' ? $dailyKey : $weeklyKey;
+                $uq = UserQuest::where('user_id', $user->id)
+                    ->where('quest_id', $q->id)
+                    ->where('period_key', $periodKey)
+                    ->first();
+
+                return [
+                    'id'            => $q->id,
+                    'slug'          => $q->slug,
+                    'title'         => $q->title,
+                    'description'   => $q->description,
+                    'type'          => $q->type,
+                    'target_type'   => $q->target_type,
+                    'target_count'  => $q->target_count,
+                    'xp_reward'     => $q->xp_reward,
+                    'current_count' => $uq ? min($q->target_count, $uq->current_count) : 0,
+                    'is_completed'  => $uq ? $uq->is_completed : false,
+                    'is_claimed'    => $uq ? $uq->is_claimed : false,
+                ];
+            });
 
             return [
-                'id'            => $q->id,
-                'slug'          => $q->slug,
-                'title'         => $q->title,
-                'description'   => $q->description,
-                'type'          => $q->type,
-                'target_type'   => $q->target_type,
-                'target_count'  => $q->target_count,
-                'xp_reward'     => $q->xp_reward,
-                'current_count' => $uq ? min($q->target_count, $uq->current_count) : 0,
-                'is_completed'  => $uq ? $uq->is_completed : false,
-                'is_claimed'    => $uq ? $uq->is_claimed : false,
+                'level'               => $levelDetails['level'],
+                'total_xp'            => $levelDetails['current_xp'],
+                'xp_in_current_level' => $levelDetails['xp_in_current_level'],
+                'xp_needed_for_next'  => $levelDetails['xp_needed_for_next'],
+                'progress_percent'    => $levelDetails['progress_percent'],
+                'rank_title'          => $levelDetails['rank_title'],
+                'rank_title_id'       => $levelDetails['rank_title_id'],
+                'current_streak'      => $profile->current_streak,
+                'longest_streak'      => $profile->longest_streak,
+                'streak_freezes'      => $profile->streak_freezes_available,
+                'unlocked_badges'     => $unlockedBadgesCount,
+                'total_badges'        => $totalBadgesCount,
+                'recent_badges'       => $recentBadges->values()->toArray(),
+                'quests'              => $quests->values()->toArray(),
             ];
         });
-
-        return [
-            'level'               => $levelDetails['level'],
-            'total_xp'            => $levelDetails['current_xp'],
-            'xp_in_current_level' => $levelDetails['xp_in_current_level'],
-            'xp_needed_for_next'  => $levelDetails['xp_needed_for_next'],
-            'progress_percent'    => $levelDetails['progress_percent'],
-            'rank_title'          => $levelDetails['rank_title'],
-            'rank_title_id'       => $levelDetails['rank_title_id'],
-            'current_streak'      => $profile->current_streak,
-            'longest_streak'      => $profile->longest_streak,
-            'streak_freezes'      => $profile->streak_freezes_available,
-            'unlocked_badges'     => $unlockedBadgesCount,
-            'total_badges'        => $totalBadgesCount,
-            'recent_badges'       => $recentBadges,
-            'quests'              => $quests,
-        ];
     }
 }

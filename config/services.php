@@ -41,4 +41,8 @@ return [
         'redirect'      => env('GOOGLE_REDIRECT_URI', 'http://localhost:8000/api/auth/google/callback'),
     ],
 
+    'kimi' => [
+        'key' => env('KIMI_API_KEY', ''),
+    ],
+
 ];
