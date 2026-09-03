@@ -3,23 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\TransactionResource;
+use App\Jobs\ProcessTransactionSideEffects;
 use App\Models\Account;
 use App\Models\Transaction;
-use App\Services\SpendingAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Mail;
-use App\Mail\BudgetAlertMail;
-use App\Services\SmartInsightService;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class TransactionController extends Controller
 {
-    public function __construct(
-        private SpendingAnalysisService $spending,
-        private \App\Services\GamificationService $gamification
-    ) {}
-
     /**
      * List transaksi dengan filter: tanggal, kategori, akun, tipe, pencarian teks.
      */
@@ -32,17 +25,16 @@ class TransactionController extends Controller
             ->when($request->category_id, fn ($q) => $q->where('category_id', $request->category_id))
             ->when($request->account_id,  fn ($q) => $q->where('account_id', $request->account_id))
             ->when($request->search, function ($q) use ($request) {
-                $search = $request->search;
-                $operator = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+                $search   = $request->search;
+                $operator = DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
                 $q->where(function ($sq) use ($search, $operator) {
                     $sq->where('description', $operator, "%{$search}%")
-                       ->orWhereHas('category', fn($c) => $c->where('name', $operator, "%{$search}%"));
+                       ->orWhereHas('category', fn ($c) => $c->where('name', $operator, "%{$search}%"));
                 });
             })
             ->orderBy('transaction_date', 'desc')
             ->orderBy('created_at', 'desc');
 
-        // Paginate: default 20 per halaman
         $perPage = $request->per_page ?? 20;
 
         return TransactionResource::collection($query->paginate($perPage));
@@ -64,111 +56,16 @@ class TransactionController extends Controller
 
         $transaction = Transaction::create($validated);
 
-        // Update saldo akun
+        // Harus sync — saldo akun mempengaruhi tampilan yang langsung di-fetch setelah ini
         $this->updateAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
 
-        // Rekam analisis spending (overall)
-        $this->spending->recordNotification($request->user());
-
-        // --- Fitur Preferences: txAlert ---
-        $preferences = $request->user()->preferences ?? [];
-        if (isset($preferences['txAlert']) && $preferences['txAlert'] === true) {
-            \App\Models\SpendingNotification::create([
-                'user_id' => $request->user()->id,
-                'type' => 'transaction_alert',
-                'period_type' => 'daily',
-                'period_label' => date('Y-m-d'),
-                'spent_percent' => 0,
-                'message' => 'Transaksi baru: ' . ($transaction->type === 'income' ? '+' : '-') . number_format($transaction->amount, 0, ',', '.') . ' (' . ($transaction->category->name ?? 'Tanpa Kategori') . ')',
-                'is_read' => false,
-            ]);
-        }
-
-        // --- Fitur Preferences: budgetAlert ---
-        if (isset($preferences['budgetAlert']) && $preferences['budgetAlert'] === true && $transaction->type === 'expense') {
-            // Check budget for the category
-            $budget = \App\Models\Budget::where('user_id', $request->user()->id)
-                ->where('category_id', $transaction->category_id)
-                ->where('month', date('n'))
-                ->where('year', date('Y'))
-                ->first();
-
-            if ($budget && $budget->limit_amount > 0) {
-                // Get total expenses for this category in this month
-                $totalSpent = \App\Models\Transaction::where('user_id', $request->user()->id)
-                    ->where('category_id', $transaction->category_id)
-                    ->where('type', 'expense')
-                    ->whereYear('transaction_date', date('Y'))
-                    ->whereMonth('transaction_date', date('m'))
-                    ->sum('amount');
-                
-                $percent = ($totalSpent / $budget->limit_amount) * 100;
-                
-                $thresholdLevel = null;
-                if ($percent >= 100) {
-                    $thresholdLevel = 100;
-                } elseif ($percent >= 80) {
-                    $thresholdLevel = 80;
-                }
-
-                if ($thresholdLevel) {
-                    // Cek apakah sudah pernah mengirim alert untuk threshold ini di bulan ini
-                    $periodLabel = 'cat_' . $transaction->category_id . '_' . date('Y-m') . '_' . $thresholdLevel;
-                    
-                    $existingAlert = \App\Models\SpendingNotification::where('user_id', $request->user()->id)
-                        ->where('type', 'budget_alert')
-                        ->where('period_label', $periodLabel)
-                        ->first();
-                        
-                    if (!$existingAlert) {
-                        $isCritical = $thresholdLevel === 100;
-                        $message = $isCritical
-                            ? 'Peringatan Kritis: Pengeluaran ' . ($transaction->category->name ?? 'Kategori') . ' telah mencapai 100% dari limit bulan ini!'
-                            : 'Peringatan: Pengeluaran ' . ($transaction->category->name ?? 'Kategori') . ' mencapai ' . round($percent) . '% dari limit bulan ini!';
-
-                        \App\Models\SpendingNotification::create([
-                            'user_id' => $request->user()->id,
-                            'type' => 'budget_alert',
-                            'period_type' => 'monthly',
-                            'period_label' => $periodLabel,
-                            'spent_percent' => $percent,
-                            'message' => $message,
-                            'is_read' => false,
-                        ]);
-
-                        // Kirim Email secara asynchronous (queue) jika queue terkonfigurasi, atau jalankan saat itu juga
-                        Mail::to($request->user()->email)->send(
-                            new BudgetAlertMail(
-                                $request->user()->name,
-                                $transaction->category->name ?? 'Tanpa Kategori',
-                                $percent,
-                                $totalSpent,
-                                $budget->limit_amount
-                            )
-                        );
-                    }
-                }
-            }
-        }
-
-        // Gamifikasi triggers
-        try {
-            $user = $request->user();
-            $this->gamification->awardXP($user, 10, 'Mencatat Transaksi');
-            $this->gamification->recordActivity($user);
-            $this->gamification->recordQuestAction($user, 'record_transactions', 1);
-            $this->gamification->updateAchievementProgress($user, 'first_tx', 1);
-
-            $totalTxCount = Transaction::where('user_id', $user->id)->count();
-            $this->gamification->updateAchievementProgress($user, 'tx_10', $totalTxCount);
-            $this->gamification->updateAchievementProgress($user, 'tx_50', $totalTxCount);
-            $this->gamification->updateAchievementProgress($user, 'tx_100', $totalTxCount);
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Tx): ' . $e->getMessage());
-        }
-
-        // Invalidate Smart Insights cache
-        SmartInsightService::invalidateUserCache($request->user());
+        // Semua side effects (gamifikasi, notifikasi, spending analysis, cache) berjalan di background
+        ProcessTransactionSideEffects::dispatch(
+            $request->user(),
+            $transaction->load(['account', 'category']),
+            'store',
+            $request->user()->preferences ?? [],
+        );
 
         return response()->json([
             'message' => 'Transaksi berhasil disimpan.',
@@ -199,32 +96,27 @@ class TransactionController extends Controller
             'transaction_date' => ['sometimes', 'date'],
         ]);
 
-        // Simpan data lama sebelum di-update
         $oldAccountId = $transaction->account_id;
         $oldType      = $transaction->type;
         $oldAmount    = $transaction->amount;
 
         $transaction->update($validated);
 
-        // Update saldo akun jika ada perubahan amount/type/account
         $hasAccountChange = isset($validated['account_id']) && $validated['account_id'] !== $oldAccountId;
         $hasTypeChange    = isset($validated['type'])       && $validated['type']       !== $oldType;
         $hasAmountChange  = isset($validated['amount'])     && (float) $validated['amount'] !== (float) $oldAmount;
 
         if ($hasAccountChange || $hasTypeChange || $hasAmountChange) {
-            // Balikkan efek transaksi lama
             $this->reverseAccountBalance($oldAccountId, $oldType, $oldAmount);
-            // Terapkan efek transaksi baru
-            $this->updateAccountBalance(
-                $transaction->account_id,
-                $transaction->type,
-                $transaction->amount
-            );
+            $this->updateAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
         }
 
-        // Rekam ulang analisis spending
-        $this->spending->recordNotification($request->user());
-        SmartInsightService::invalidateUserCache($request->user());
+        ProcessTransactionSideEffects::dispatch(
+            $request->user(),
+            $transaction->fresh()->load(['account', 'category']),
+            'update',
+            $request->user()->preferences ?? [],
+        );
 
         return response()->json([
             'message' => 'Transaksi berhasil diperbarui.',
@@ -236,14 +128,17 @@ class TransactionController extends Controller
     {
         $this->authorizeTransaction($request, $transaction);
 
-        // Balikkan efek saldo
+        // Harus sync — saldo harus langsung ter-update sebelum record dihapus
         $this->reverseAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
 
         $transaction->delete();
 
-        // Rekam ulang analisis spending
-        $this->spending->recordNotification($request->user());
-        SmartInsightService::invalidateUserCache($request->user());
+        ProcessTransactionSideEffects::dispatch(
+            $request->user(),
+            $transaction,
+            'delete',
+            $request->user()->preferences ?? [],
+        );
 
         return response()->json(['message' => 'Transaksi berhasil dihapus.']);
     }
@@ -264,7 +159,6 @@ class TransactionController extends Controller
 
     private function reverseAccountBalance(int $accountId, string $type, float $amount): void
     {
-        // Reverse: income → kurangi, expense → tambah
         $this->updateAccountBalance($accountId, $type === 'income' ? 'expense' : 'income', $amount);
     }
 
