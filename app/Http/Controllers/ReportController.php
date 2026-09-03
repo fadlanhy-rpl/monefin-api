@@ -101,10 +101,16 @@ class ReportController extends Controller
             ->with('category:id,name,icon,color');
 
         if ($request->start_date) {
-            $query->where('transaction_date', '>=', $request->start_date);
+            try {
+                $startDate = \Carbon\Carbon::parse($request->start_date)->toDateString();
+                $query->where('transaction_date', '>=', $startDate);
+            } catch (\Throwable) {}
         }
         if ($request->end_date) {
-            $query->where('transaction_date', '<=', $request->end_date);
+            try {
+                $endDate = \Carbon\Carbon::parse($request->end_date)->toDateString();
+                $query->where('transaction_date', '<=', $endDate);
+            } catch (\Throwable) {}
         }
 
         $rows = $query

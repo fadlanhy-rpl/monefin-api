@@ -3,11 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Models\IncomeSetting;
+use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class IncomeSettingController extends Controller
 {
+    public function __construct(
+        private GamificationService $gamification
+    ) {}
     /**
      * Get all active recurring transactions for the user.
      */
@@ -46,6 +50,15 @@ class IncomeSettingController extends Controller
             'is_active'      => true,
             'effective_date' => $validated['effective_date'] ?? today(),
         ]);
+
+        try {
+            $user = $request->user();
+            $this->gamification->awardXP($user, 50, 'Setup Transaksi Rutin');
+            $this->gamification->recordActivity($user);
+            $this->gamification->updateAchievementProgress($user, 'recurring_setup', 1);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Recurring): ' . $e->getMessage());
+        }
 
         return response()->json([
             'message' => 'Transaksi rutin berhasil ditambahkan.',

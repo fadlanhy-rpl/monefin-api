@@ -30,6 +30,11 @@ class SpendingController extends Controller
      */
     public function notifications(Request $request): AnonymousResourceCollection
     {
+        // Auto-prune notifikasi yang sudah lebih dari 30 hari
+        SpendingNotification::where('user_id', $request->user()->id)
+            ->where('created_at', '<', now()->subDays(30))
+            ->delete();
+
         $notifications = SpendingNotification::where('user_id', $request->user()->id)
             ->latest()
             ->paginate(20);

@@ -5,12 +5,16 @@ namespace App\Http\Controllers;
 use App\Http\Resources\BudgetResource;
 use App\Models\Budget;
 use App\Models\Transaction;
+use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class BudgetController extends Controller
 {
+    public function __construct(
+        private GamificationService $gamification
+    ) {}
     public function index(Request $request): AnonymousResourceCollection
     {
         $month = $request->month ?? now()->month;
@@ -58,6 +62,16 @@ class BudgetController extends Controller
             ],
             ['limit_amount' => $validated['limit_amount']]
         );
+
+        try {
+            $user = $request->user();
+            $this->gamification->awardXP($user, 25, 'Membuat/Memperbarui Anggaran');
+            $this->gamification->recordActivity($user);
+            $budgetCount = Budget::where('user_id', $user->id)->count();
+            $this->gamification->updateAchievementProgress($user, 'budget_created', $budgetCount);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Budget): ' . $e->getMessage());
+        }
 
         return response()->json([
             'message' => 'Budget berhasil disimpan.',

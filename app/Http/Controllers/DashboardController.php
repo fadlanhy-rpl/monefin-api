@@ -6,6 +6,7 @@ use App\Models\Transaction;
 use App\Services\SpendingAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
@@ -60,7 +61,8 @@ class DashboardController extends Controller
             ->sum('amount');
 
         // 3. Status hemat/normal/boros
-        $spendingStatus = $this->spending->analyze($user);
+        $lang           = $request->header('Accept-Language') ?? ($user->preferences['language'] ?? 'id');
+        $spendingStatus = $this->spending->analyze($user, $lang);
 
         // 4. Pengeluaran per kategori pada rentang tanggal terpilih
         $expenseByCategory = Transaction::where('user_id', $user->id)
@@ -87,41 +89,44 @@ class DashboardController extends Controller
             ->limit(5)
             ->get();
 
-        // 6. Weekly Trend (Sen - Min) - This week vs Last week
+        // 6. Weekly Trend (Sen - Min) - Single aggregated query for this week and last week
         $startOfThisWeek = now()->startOfWeek();
         $endOfThisWeek   = now()->endOfWeek();
         $startOfLastWeek = now()->subWeek()->startOfWeek();
         $endOfLastWeek   = now()->subWeek()->endOfWeek();
 
-        $thisWeekExpenses = Transaction::where('user_id', $user->id)
+        $thisWeekGrouped = [];
+        $thisWeekRows = Transaction::where('user_id', $user->id)
             ->where('type', 'expense')
             ->whereBetween('transaction_date', [$startOfThisWeek->toDateString(), $endOfThisWeek->toDateString()])
-            ->get()
-            ->groupBy(function($item) {
-                return \Carbon\Carbon::parse($item->transaction_date)->dayOfWeek + 1;
-            })
-            ->map(function($group) {
-                return (object) ['total' => $group->sum('amount')];
-            });
-            
-        $lastWeekExpenses = Transaction::where('user_id', $user->id)
+            ->selectRaw('transaction_date, SUM(amount) as total')
+            ->groupBy('transaction_date')
+            ->get();
+
+        foreach ($thisWeekRows as $row) {
+            $dow = \Carbon\Carbon::parse($row->transaction_date)->dayOfWeek + 1; // 1=Sun, 2=Mon...
+            $thisWeekGrouped[$dow] = ($thisWeekGrouped[$dow] ?? 0) + (float) $row->total;
+        }
+
+        $lastWeekGrouped = [];
+        $lastWeekRows = Transaction::where('user_id', $user->id)
             ->where('type', 'expense')
             ->whereBetween('transaction_date', [$startOfLastWeek->toDateString(), $endOfLastWeek->toDateString()])
-            ->get()
-            ->groupBy(function($item) {
-                return \Carbon\Carbon::parse($item->transaction_date)->dayOfWeek + 1;
-            })
-            ->map(function($group) {
-                return (object) ['total' => $group->sum('amount')];
-            });
+            ->selectRaw('transaction_date, SUM(amount) as total')
+            ->groupBy('transaction_date')
+            ->get();
 
-        // MySQL DAYOFWEEK: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+        foreach ($lastWeekRows as $row) {
+            $dow = \Carbon\Carbon::parse($row->transaction_date)->dayOfWeek + 1;
+            $lastWeekGrouped[$dow] = ($lastWeekGrouped[$dow] ?? 0) + (float) $row->total;
+        }
+
         $daysMap = [2 => 'Sen', 3 => 'Sel', 4 => 'Rab', 5 => 'Kam', 6 => 'Jum', 7 => 'Sab', 1 => 'Min'];
         $weeklyTrend = [];
         foreach ([2,3,4,5,6,7,1] as $idx) {
-            $thisAmt = (float) ($thisWeekExpenses[$idx]->total ?? 0);
-            $lastAmt = (float) ($lastWeekExpenses[$idx]->total ?? 0);
-            $max = max($thisAmt, $lastAmt, 1); // prevent division by zero
+            $thisAmt = (float) ($thisWeekGrouped[$idx] ?? 0);
+            $lastAmt = (float) ($lastWeekGrouped[$idx] ?? 0);
+            $max = max($thisAmt, $lastAmt, 1);
             
             $weeklyTrend[] = [
                 'label'   => $daysMap[$idx],
@@ -132,28 +137,48 @@ class DashboardController extends Controller
             ];
         }
 
-        // 7. Monthly Trend (Past 6 months) - This year vs Last year
-        $monthlyTrend = [];
+        // 7. Monthly Trend (Past 6 months) - Optimized single query per period
+        $driver = DB::getDriverName();
+        $monthExpr = match($driver) {
+            'sqlite' => "strftime('%Y-%m', transaction_date)",
+            'pgsql'  => "TO_CHAR(transaction_date, 'YYYY-MM')",
+            default  => "DATE_FORMAT(transaction_date, '%Y-%m')",
+        };
+
         $startMonth = now()->subMonths(5)->startOfMonth();
+        $endMonth = now()->endOfMonth();
+        $startMonthLastYear = now()->subMonths(5)->subYear()->startOfMonth();
+        $endMonthLastYear = now()->subYear()->endOfMonth();
+
+        $thisYearMonthSums = Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startMonth->toDateString(), $endMonth->toDateString()])
+            ->selectRaw("{$monthExpr} as period, SUM(amount) as total")
+            ->groupByRaw($monthExpr)
+            ->pluck('total', 'period')
+            ->toArray();
+
+        $lastYearMonthSums = Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startMonthLastYear->toDateString(), $endMonthLastYear->toDateString()])
+            ->selectRaw("{$monthExpr} as period, SUM(amount) as total")
+            ->groupByRaw($monthExpr)
+            ->pluck('total', 'period')
+            ->toArray();
+
+        $monthlyTrend = [];
         for ($i = 0; $i < 6; $i++) {
             $currentDate = $startMonth->copy()->addMonths($i);
+            $periodKeyThisYear = $currentDate->format('Y-m');
+            $periodKeyLastYear = $currentDate->copy()->subYear()->format('Y-m');
+
             $m = $currentDate->month;
-            $y = $currentDate->year;
             $monthLabel = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'][$m-1];
             
-            $thisAmt = (float) Transaction::where('user_id', $user->id)
-                ->where('type', 'expense')
-                ->whereMonth('transaction_date', $m)
-                ->whereYear('transaction_date', $y)
-                ->sum('amount');
-                
-            $lastAmt = (float) Transaction::where('user_id', $user->id)
-                ->where('type', 'expense')
-                ->whereMonth('transaction_date', $m)
-                ->whereYear('transaction_date', $y - 1)
-                ->sum('amount');
-                
+            $thisAmt = (float) ($thisYearMonthSums[$periodKeyThisYear] ?? 0);
+            $lastAmt = (float) ($lastYearMonthSums[$periodKeyLastYear] ?? 0);
             $max = max($thisAmt, $lastAmt, 1);
+
             $monthlyTrend[] = [
                 'label'   => $monthLabel,
                 'thisAmt' => $thisAmt,

@@ -13,29 +13,32 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Hapus statefulApi() karena kita menggunakan murni Bearer token (Stateless)
+        // Jangan redirect guest ke route('login') yang tidak ada pada API stateless
+        $middleware->redirectGuestsTo(fn (Request $request) => null);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*'),
+            fn (Request $request) => true,
         );
 
         $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, Request $request) {
-            if ($request->is('api/*')) {
-                $token = $request->bearerToken();
-                if ($token) {
-                    $tokenParts = explode('|', $token, 2);
-                    $plainTextToken = count($tokenParts) === 2 ? $tokenParts[1] : $tokenParts[0];
-                    $hashed = hash('sha256', $plainTextToken);
-                    
-                    $revokedDetails = \Illuminate\Support\Facades\Cache::get('revoked_' . $hashed);
-                    if ($revokedDetails) {
-                        return response()->json([
-                            'message' => 'Unauthenticated.',
-                            'revoked_by' => $revokedDetails
-                        ], 401);
-                    }
+            $token = $request->bearerToken();
+            if ($token) {
+                $tokenParts = explode('|', $token, 2);
+                $plainTextToken = count($tokenParts) === 2 ? $tokenParts[1] : $tokenParts[0];
+                $hashed = hash('sha256', $plainTextToken);
+                
+                $revokedDetails = \Illuminate\Support\Facades\Cache::get('revoked_' . $hashed);
+                if ($revokedDetails) {
+                    return response()->json([
+                        'message' => 'Unauthenticated.',
+                        'revoked_by' => $revokedDetails
+                    ], 401);
                 }
             }
+
+            return response()->json([
+                'message' => 'Unauthenticated.'
+            ], 401);
         });
     })->create();

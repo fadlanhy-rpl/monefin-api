@@ -15,13 +15,15 @@ class SpendingAnalysisService
      * Hitung status pengeluaran user pada periode berjalan.
      * Return array siap dipakai controller / dashboard.
      */
-    public function analyze(User $user): array
+    public function analyze(User $user, string $lang = 'id'): array
     {
+        $lang = str_starts_with(strtolower($lang), 'en') ? 'en' : 'id';
+
         // 1. Ambil income setting aktif
         $setting = $user->activeIncomeSetting()->first();
 
         if (! $setting || $setting->amount <= 0) {
-            return $this->emptyResult('income_setting_not_found');
+            return $this->emptyResult('income_setting_not_found', $lang);
         }
 
         // 2. Tentukan rentang tanggal & label periode
@@ -43,7 +45,7 @@ class SpendingAnalysisService
         $percent = round(($spent / $setting->amount) * 100, 2);
 
         // 6. Klasifikasi status
-        [$status, $message] = $this->classify($percent, $threshold);
+        [$status, $message] = $this->classify($percent, $threshold, $lang);
 
         return [
             'status'       => $status,
@@ -114,10 +116,22 @@ class SpendingAnalysisService
         return [$startDate, $endDate, $periodLabel];
     }
 
-    private function classify(float $percent, SpendingThreshold $threshold): array
+    private function classify(float $percent, SpendingThreshold $threshold, string $lang = 'id'): array
     {
         $hematMax = (float) $threshold->hemat_max_percent;
         $borosMin = (float) $threshold->boros_min_percent;
+
+        if ($lang === 'en') {
+            if ($percent <= $hematMax) {
+                return ['hemat', "Awesome! Your spending is only {$percent}% of your allowance. Great savings this period! 🎉"];
+            }
+
+            if ($percent > $borosMin) {
+                return ['boros', "Watch out! Your spending has reached {$percent}% of your allowance. Cut back on unnecessary expenses. ⚠️"];
+            }
+
+            return ['normal', "Your spending is at {$percent}% of your allowance. Keep it well controlled! 👍"];
+        }
 
         if ($percent <= $hematMax) {
             return ['hemat', "Keren! Pengeluaranmu baru {$percent}% dari uang saku. Kamu sangat hemat bulan ini! 🎉"];
@@ -130,7 +144,7 @@ class SpendingAnalysisService
         return ['normal', "Pengeluaranmu ada di {$percent}% dari uang saku. Tetap terkontrol ya! 👍"];
     }
 
-    private function emptyResult(string $reason): array
+    private function emptyResult(string $reason, string $lang = 'id'): array
     {
         return [
             'status'       => $reason,
@@ -139,7 +153,7 @@ class SpendingAnalysisService
             'income_amount'=> 0,
             'period_type'  => null,
             'period_label' => null,
-            'message'      => 'Silakan atur uang saku terlebih dahulu di halaman Settings.',
+            'message'      => $lang === 'en' ? 'Please set your allowance first in the Settings page.' : 'Silakan atur uang saku terlebih dahulu di halaman Settings.',
         ];
     }
 }

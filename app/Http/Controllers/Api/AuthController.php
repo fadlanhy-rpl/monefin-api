@@ -173,6 +173,10 @@ class AuthController extends Controller
     private function detectDevice(Request $request): string
     {
         $ua = $request->userAgent() ?? '';
+        $clientBrowser = $request->header('X-Client-Browser') 
+            ?? $request->header('x-client-browser') 
+            ?? $request->cookie('client_browser') 
+            ?? $request->query('client_browser');
 
         if (str_contains($ua, 'Mobile') || str_contains($ua, 'Android') || str_contains($ua, 'iPhone')) {
             $device = 'Mobile';
@@ -180,12 +184,20 @@ class AuthController extends Controller
             $device = 'Desktop';
         }
 
-        // Urutan deteksi browser sangat penting karena string User-Agent sering mengandung nama browser lain.
-        // Contoh: Edge berbasis Chromium memiliki "Chrome" dan "Edg" di dalamnya.
-        if (str_contains($ua, 'Edg')) {
+        // Urutan deteksi browser:
+        // 1. Cek header/cookie client kustom (Brave secara sengaja menyamarkan UA menjadi Chrome untuk privasi)
+        if ($clientBrowser && strcasecmp($clientBrowser, 'Brave') === 0) {
+            $browser = 'Brave';
+        } elseif (str_contains($ua, 'Brave')) {
+            $browser = 'Brave';
+        } elseif (str_contains($ua, 'Edg')) {
             $browser = 'Edge';
         } elseif (str_contains($ua, 'OPR') || str_contains($ua, 'Opera')) {
             $browser = 'Opera';
+        } elseif (str_contains($ua, 'Vivaldi')) {
+            $browser = 'Vivaldi';
+        } elseif (str_contains($ua, 'SamsungBrowser')) {
+            $browser = 'Samsung Internet';
         } elseif (str_contains($ua, 'Chrome')) {
             $browser = 'Chrome';
         } elseif (str_contains($ua, 'Firefox')) {
@@ -311,7 +323,7 @@ class AuthController extends Controller
      * Redirect ke halaman login Google
      * GET /api/auth/google
      */
-    public function redirectToGoogle()
+    public function redirectToGoogle(Request $request)
     {
         /** @var \Laravel\Socialite\Two\AbstractProvider $driver */
         $driver = Socialite::driver('google');
@@ -320,7 +332,13 @@ class AuthController extends Controller
             $driver->setHttpClient(new \GuzzleHttp\Client(['verify' => false]));
         }
 
-        return $driver->stateless()->redirect();
+        $redirect = $driver->stateless()->redirect();
+
+        if ($browser = $request->query('client_browser')) {
+            $redirect->withCookie(cookie('client_browser', $browser, 10));
+        }
+
+        return $redirect;
     }
 
     /**
@@ -763,6 +781,16 @@ class AuthController extends Controller
 
         $user = $request->user();
         $user->update(['two_factor_enabled' => $request->enabled]);
+
+        if ($request->enabled) {
+            try {
+                $gamification = app(\App\Services\GamificationService::class);
+                $gamification->awardXP($user, 75, 'Aktivasi Two-Factor Authentication');
+                $gamification->updateAchievementProgress($user, 'security_2fa', 1);
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Gamification Error (2FA toggle): ' . $e->getMessage());
+            }
+        }
 
         return response()->json([
             'data'    => ['user' => $user->fresh()],

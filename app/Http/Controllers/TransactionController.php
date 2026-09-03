@@ -10,11 +10,15 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\BudgetAlertMail;
+use App\Services\SmartInsightService;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 class TransactionController extends Controller
 {
-    public function __construct(private SpendingAnalysisService $spending) {}
+    public function __construct(
+        private SpendingAnalysisService $spending,
+        private \App\Services\GamificationService $gamification
+    ) {}
 
     /**
      * List transaksi dengan filter: tanggal, kategori, akun, tipe, pencarian teks.
@@ -147,6 +151,25 @@ class TransactionController extends Controller
             }
         }
 
+        // Gamifikasi triggers
+        try {
+            $user = $request->user();
+            $this->gamification->awardXP($user, 10, 'Mencatat Transaksi');
+            $this->gamification->recordActivity($user);
+            $this->gamification->recordQuestAction($user, 'record_transactions', 1);
+            $this->gamification->updateAchievementProgress($user, 'first_tx', 1);
+
+            $totalTxCount = Transaction::where('user_id', $user->id)->count();
+            $this->gamification->updateAchievementProgress($user, 'tx_10', $totalTxCount);
+            $this->gamification->updateAchievementProgress($user, 'tx_50', $totalTxCount);
+            $this->gamification->updateAchievementProgress($user, 'tx_100', $totalTxCount);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Tx): ' . $e->getMessage());
+        }
+
+        // Invalidate Smart Insights cache
+        SmartInsightService::invalidateUserCache($request->user());
+
         return response()->json([
             'message' => 'Transaksi berhasil disimpan.',
             'data'    => new TransactionResource($transaction->load(['account', 'category'])),
@@ -179,19 +202,29 @@ class TransactionController extends Controller
         // Simpan data lama sebelum di-update
         $oldAccountId = $transaction->account_id;
         $oldType      = $transaction->type;
-        $oldAmount    = (float) $transaction->amount;
-
-        // Balikkan efek saldo lama
-        $this->reverseAccountBalance($oldAccountId, $oldType, $oldAmount);
+        $oldAmount    = $transaction->amount;
 
         $transaction->update($validated);
-        $transaction->refresh();
 
-        // Terapkan efek saldo baru (gunakan data terbaru setelah update)
-        $this->updateAccountBalance($transaction->account_id, $transaction->type, (float) $transaction->amount);
+        // Update saldo akun jika ada perubahan amount/type/account
+        $hasAccountChange = isset($validated['account_id']) && $validated['account_id'] !== $oldAccountId;
+        $hasTypeChange    = isset($validated['type'])       && $validated['type']       !== $oldType;
+        $hasAmountChange  = isset($validated['amount'])     && (float) $validated['amount'] !== (float) $oldAmount;
+
+        if ($hasAccountChange || $hasTypeChange || $hasAmountChange) {
+            // Balikkan efek transaksi lama
+            $this->reverseAccountBalance($oldAccountId, $oldType, $oldAmount);
+            // Terapkan efek transaksi baru
+            $this->updateAccountBalance(
+                $transaction->account_id,
+                $transaction->type,
+                $transaction->amount
+            );
+        }
 
         // Rekam ulang analisis spending
         $this->spending->recordNotification($request->user());
+        SmartInsightService::invalidateUserCache($request->user());
 
         return response()->json([
             'message' => 'Transaksi berhasil diperbarui.',
@@ -210,6 +243,7 @@ class TransactionController extends Controller
 
         // Rekam ulang analisis spending
         $this->spending->recordNotification($request->user());
+        SmartInsightService::invalidateUserCache($request->user());
 
         return response()->json(['message' => 'Transaksi berhasil dihapus.']);
     }
