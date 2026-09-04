@@ -82,14 +82,7 @@ class AuthController extends Controller
                 return $penaltyResponse;
             }
 
-            OtpCode::where('email', $user->email)->where('type', '2fa')->delete();
-            $otp = rand(100000, 999999);
-            OtpCode::create([
-                'email'      => $user->email,
-                'code'       => $otp,
-                'type'       => '2fa',
-                'expires_at' => Carbon::now()->addMinutes(5),
-            ]);
+            $otp = OtpCode::generateFor($user->email, '2fa', 5);
 
             try {
                 Mail::to($user->email)->send(new SendOtpMail($otp, '2fa'));
@@ -260,17 +253,8 @@ class AuthController extends Controller
             ]);
         }
 
-        // Hapus OTP verifikasi lama untuk email ini
-        OtpCode::where('email', $user->email)->where('type', 'verification')->delete();
-
-        // Generate & Kirim OTP verifikasi baru
-        $otp = rand(100000, 999999);
-        OtpCode::create([
-            'email'      => $user->email,
-            'code'       => $otp,
-            'type'       => 'verification',
-            'expires_at' => Carbon::now()->addMinutes(5),
-        ]);
+        // Generate & simpan OTP verifikasi baru (Bcrypt hashed di database)
+        $otp = OtpCode::generateFor($user->email, 'verification', 5);
 
         try {
             Mail::to($user->email)->send(new SendOtpMail($otp, 'verification'));
@@ -389,14 +373,7 @@ class AuthController extends Controller
                     );
                 }
 
-                OtpCode::where('email', $user->email)->where('type', '2fa')->delete();
-                $otp = rand(100000, 999999);
-                OtpCode::create([
-                    'email'      => $user->email,
-                    'code'       => $otp,
-                    'type'       => '2fa',
-                    'expires_at' => Carbon::now()->addMinutes(5),
-                ]);
+                $otp = OtpCode::generateFor($user->email, '2fa', 5);
 
                 try {
                     Mail::to($user->email)->send(new SendOtpMail($otp, '2fa'));
@@ -539,11 +516,7 @@ class AuthController extends Controller
             'otp'   => 'required|string|size:6',
         ]);
 
-        $otpRecord = OtpCode::where('email', $request->email)
-            ->where('code', $request->otp)
-            ->where('type', 'verification')
-            ->where('expires_at', '>', Carbon::now())
-            ->first();
+        $otpRecord = OtpCode::verify($request->email, 'verification', $request->otp);
 
         if (!$otpRecord) {
             return response()->json([
@@ -594,15 +567,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'User tidak ditemukan.'], 404);
         }
 
-        OtpCode::where('email', $request->email)->where('type', $request->type)->delete();
-
-        $otp = rand(100000, 999999);
-        OtpCode::create([
-            'email'      => $request->email,
-            'code'       => $otp,
-            'type'       => $request->type,
-            'expires_at' => Carbon::now()->addMinutes(5),
-        ]);
+        $otp = OtpCode::generateFor($request->email, $request->type, 5);
 
         try {
             Mail::to($request->email)->send(new SendOtpMail($otp, $request->type));
@@ -637,15 +602,7 @@ class AuthController extends Controller
             ], 400);
         }
 
-        OtpCode::where('email', $request->email)->where('type', 'reset')->delete();
-
-        $otp = rand(100000, 999999);
-        OtpCode::create([
-            'email'      => $request->email,
-            'code'       => $otp,
-            'type'       => 'reset',
-            'expires_at' => Carbon::now()->addMinutes(5),
-        ]);
+        $otp = OtpCode::generateFor($request->email, 'reset', 5);
 
         try {
             Mail::to($request->email)->send(new SendOtpMail($otp, 'reset'));
@@ -672,11 +629,7 @@ class AuthController extends Controller
             'password' => 'required|min:8|confirmed',
         ]);
 
-        $otpRecord = OtpCode::where('email', $request->email)
-            ->where('code', $request->otp)
-            ->where('type', 'reset')
-            ->where('expires_at', '>', Carbon::now())
-            ->first();
+        $otpRecord = OtpCode::verify($request->email, 'reset', $request->otp);
 
         if (!$otpRecord) {
             return response()->json([
@@ -739,11 +692,7 @@ class AuthController extends Controller
             return $penaltyResponse;
         }
 
-        $otpRecord = OtpCode::where('email', $request->email)
-            ->where('code', $request->otp)
-            ->where('type', '2fa')
-            ->where('expires_at', '>', Carbon::now())
-            ->first();
+        $otpRecord = OtpCode::verify($request->email, '2fa', $request->otp);
 
         if (!$otpRecord) {
             return $this->handleFailedOtp($request->email);
@@ -1026,14 +975,7 @@ class AuthController extends Controller
         }
 
         // 2. Buatkan OTP Reset Password baru agar pemilik akun bisa langsung ganti password
-        OtpCode::where('email', $user->email)->where('type', 'reset')->delete();
-        $otp = rand(100000, 999999);
-        OtpCode::create([
-            'email'      => $user->email,
-            'code'       => $otp,
-            'type'       => 'reset',
-            'expires_at' => Carbon::now()->addMinutes(15),
-        ]);
+        $otp = OtpCode::generateFor($user->email, 'reset', 15);
 
         try {
             Mail::to($user->email)->send(new SendOtpMail($otp, 'reset'));
