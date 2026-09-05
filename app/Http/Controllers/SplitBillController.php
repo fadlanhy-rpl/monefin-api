@@ -97,7 +97,14 @@ class SplitBillController extends Controller
             'items.*.participant_ids'      => ['nullable', 'array'],
         ]);
 
-        $splitBill = $this->splitBillService->createSplitBill($request->user(), $validated);
+        try {
+            $splitBill = $this->splitBillService->createSplitBill($request->user(), $validated);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'status'  => 'success',
@@ -134,7 +141,14 @@ class SplitBillController extends Controller
             'items.*.participant_ids'      => ['nullable', 'array'],
         ]);
 
-        $result = $this->splitBillService->calculateSplit($validated);
+        try {
+            $result = $this->splitBillService->calculateSplit($validated);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'status' => 'success',
