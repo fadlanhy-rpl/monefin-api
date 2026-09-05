@@ -137,10 +137,18 @@ class TransactionController extends Controller
     {
         $this->authorizeTransaction($request, $transaction);
 
-        // Harus sync — saldo harus langsung ter-update sebelum record dihapus
-        $this->reverseAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
+        // Atomically claim the row: only the request whose soft-delete actually
+        // moves an as-yet-undeleted row is allowed to reverse the balance.
+        $claimed = Transaction::query()
+            ->whereKey($transaction->getKey())
+            ->whereNull('deleted_at')
+            ->update(['deleted_at' => now()]);
 
-        $transaction->delete();
+        if ($claimed !== 1) {
+            return response()->json(['message' => 'Transaksi berhasil dihapus.']);
+        }
+
+        $this->reverseAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
 
         ProcessTransactionSideEffects::dispatch(
             $request->user(),

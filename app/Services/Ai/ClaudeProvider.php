@@ -41,7 +41,7 @@ class ClaudeProvider implements AiProvider
             return 'Tidak ada pesan yang valid untuk dikirim ke Claude.';
         }
 
-        $verifySSL = config('app.env') === 'production';
+        $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
         $payload = [
             'model'       => $this->model,
@@ -115,7 +115,7 @@ class ClaudeProvider implements AiProvider
             $payload['system'] = $systemPrompt;
         }
 
-        $verifySSL = config('app.env') === 'production';
+        $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
         try {
             $client = new \GuzzleHttp\Client([

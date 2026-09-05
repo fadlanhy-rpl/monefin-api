@@ -121,6 +121,22 @@ class ProcessRecurringTransactions extends Command
                     continue;
                 }
 
+                // Claim the tick atomically: only the run that moves last_processed_date
+                // forward from the value this run read may post the transaction.
+                $claimed = IncomeSetting::whereKey($setting->getKey())
+                    ->where(function ($q) use ($lastProcessed) {
+                        if ($lastProcessed === null) {
+                            $q->whereNull('last_processed_date');
+                        } else {
+                            $q->where('last_processed_date', $lastProcessed->toDateString());
+                        }
+                    })
+                    ->update(['last_processed_date' => $today->toDateString()]);
+
+                if ($claimed !== 1) {
+                    continue; // Another process already claimed this tick
+                }
+
                 // Generate Transaksi & Update saldo akun secara atomik
                 DB::transaction(function () use ($setting, $account, $category, $today) {
                     Transaction::create([
@@ -138,8 +154,6 @@ class ProcessRecurringTransactions extends Command
                     } else {
                         $account->decrement('balance', $setting->amount);
                     }
-
-                    $setting->update(['last_processed_date' => $today->toDateString()]);
                 });
 
                 $processedCount++;

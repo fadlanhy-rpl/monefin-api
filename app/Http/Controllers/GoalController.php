@@ -56,17 +56,21 @@ class GoalController extends Controller
             $actualDeposit = $remaining;
         }
 
-        if ((float) $account->balance < $actualDeposit) {
-            return response()->json([
-                'message' => 'Saldo akun tidak mencukupi untuk melakukan deposit tabungan.'
-            ], 422);
-        }
-
         $category = $request->user()->categories()->where('type', 'expense')->first();
         $categoryId = $category?->id;
 
-        DB::transaction(function () use ($request, $account, $goal, $actualDeposit, $categoryId) {
-            $account->decrement('balance', $actualDeposit);
+        $insufficient = false;
+
+        DB::transaction(function () use ($request, $account, $goal, $actualDeposit, $categoryId, &$insufficient) {
+            $affected = Account::where('id', $account->id)
+                ->where('balance', '>=', $actualDeposit)
+                ->decrement('balance', $actualDeposit);
+
+            if ($affected !== 1) {
+                $insufficient = true;
+                return;
+            }
+
             $goal->increment('current_amount', $actualDeposit);
 
             $request->user()->transactions()->create([
@@ -79,6 +83,12 @@ class GoalController extends Controller
                 'transaction_date' => now()->toDateString(),
             ]);
         });
+
+        if ($insufficient) {
+            return response()->json([
+                'message' => 'Saldo akun tidak mencukupi untuk melakukan deposit tabungan.'
+            ], 422);
+        }
 
         if ($wasCapped) {
             $message = "Setoran disesuaikan karena target tabungan '{$goal->name}' telah tercapai 100%! 🎉";
@@ -96,7 +106,17 @@ class GoalController extends Controller
 
             $freshGoal = $goal->fresh();
             if ($freshGoal->current_amount >= $freshGoal->target_amount) {
-                $this->gamification->awardXP($user, 200, "Target Tercapai 100%: {$goal->name} 🎉");
+                // Award the completion bonus at most once per goal. The conditional
+                // update is the claim: a deposit/withdraw/deposit cycle, or two
+                // concurrent deposits, cannot re-mint the 200 XP.
+                $claimed = Goal::whereKey($goal->getKey())
+                    ->whereNull('completion_bonus_awarded_at')
+                    ->update(['completion_bonus_awarded_at' => now()]);
+
+                if ($claimed === 1) {
+                    $this->gamification->awardXP($user, 200, "Target Tercapai 100%: {$goal->name} 🎉");
+                }
+
                 $completedCount = Goal::where('user_id', $user->id)
                     ->whereColumn('current_amount', '>=', 'target_amount')
                     ->count();
@@ -128,17 +148,21 @@ class GoalController extends Controller
         $account = $request->user()->accounts()->findOrFail($validated['account_id']);
         $amount = (float) $validated['amount'];
 
-        if ((float) $goal->current_amount < $amount) {
-            return response()->json([
-                'message' => 'Saldo tabungan goal tidak mencukupi untuk ditarik.'
-            ], 422);
-        }
-
         $category = $request->user()->categories()->where('type', 'income')->first();
         $categoryId = $category?->id;
 
-        DB::transaction(function () use ($request, $account, $goal, $amount, $categoryId) {
-            $goal->decrement('current_amount', $amount);
+        $insufficient = false;
+
+        DB::transaction(function () use ($request, $account, $goal, $amount, $categoryId, &$insufficient) {
+            $affected = Goal::where('id', $goal->id)
+                ->where('current_amount', '>=', $amount)
+                ->decrement('current_amount', $amount);
+
+            if ($affected !== 1) {
+                $insufficient = true;
+                return;
+            }
+
             $account->increment('balance', $amount);
 
             $request->user()->transactions()->create([
@@ -151,6 +175,12 @@ class GoalController extends Controller
                 'transaction_date' => now()->toDateString(),
             ]);
         });
+
+        if ($insufficient) {
+            return response()->json([
+                'message' => 'Saldo tabungan goal tidak mencukupi untuk ditarik.'
+            ], 422);
+        }
 
         return response()->json([
             'message' => 'Berhasil menarik dana dari target tabungan ke akun Anda!',

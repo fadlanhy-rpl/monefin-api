@@ -12,6 +12,7 @@ use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class SplitBillService
 {
@@ -205,7 +206,29 @@ class SplitBillService
                 $p['amount_owed'] = $this->applyRounding($baseShare, $roundingMode);
             }
             unset($p);
+
+            // Absorb the rounding residual so the shares account for the declared
+            // total exactly; otherwise the difference is silently lost.
+            $assigned = array_sum(array_map(
+                static fn ($p) => (float) ($p['amount_owed'] ?? 0),
+                $participants
+            ));
+            $residual = round($totalAmount - $assigned, 2);
+            if (abs($residual) >= 0.005 && $pCount > 0) {
+                $participants[0]['amount_owed'] = round(
+                    (float) $participants[0]['amount_owed'] + $residual, 2
+                );
+            }
         } elseif ($splitMode === 'percentage') {
+            $pctSum = array_sum(array_map(
+                static fn ($p) => (float) ($p['percentage'] ?? (100 / max(1, $pCount))),
+                $participants
+            ));
+            if (abs($pctSum - 100) > 0.01) {
+                throw ValidationException::withMessages([
+                    'participants' => ['Persentase pembagian harus berjumlah 100%.'],
+                ]);
+            }
             foreach ($participants as &$p) {
                 $pct = (float) ($p['percentage'] ?? (100 / max(1, $pCount)));
                 $share = $totalAmount * ($pct / 100);
@@ -214,9 +237,19 @@ class SplitBillService
             unset($p);
         } elseif ($splitMode === 'exact') {
             foreach ($participants as &$p) {
-                $p['amount_owed'] = (float) ($p['amount_owed'] ?? 0);
+                $p['amount_owed'] = max(0, (float) ($p['amount_owed'] ?? 0));
             }
             unset($p);
+
+            $exactSum = array_sum(array_map(
+                static fn ($p) => (float) ($p['amount_owed'] ?? 0),
+                $participants
+            ));
+            if (abs($exactSum - $totalAmount) > 0.01) {
+                throw ValidationException::withMessages([
+                    'participants' => ['Nominal tiap partisipan harus berjumlah sama dengan total tagihan.'],
+                ]);
+            }
         } elseif ($splitMode === 'itemized') {
             // Hitung subtotal tiap partisipan berdasarkan item yang dipesan
             $participantSubtotals = array_fill(0, $pCount, 0);
@@ -287,6 +320,18 @@ class SplitBillService
      */
     public function markParticipantPayment(SplitBill $splitBill, SplitBillParticipant $participant, float $amountPaid, ?string $notes = null): SplitBillParticipant
     {
+        if ($amountPaid < 0) {
+            throw ValidationException::withMessages([
+                'amount_paid' => ['Jumlah pembayaran tidak boleh negatif.'],
+            ]);
+        }
+
+        if ($amountPaid > (float) $participant->amount_owed) {
+            throw ValidationException::withMessages([
+                'amount_paid' => ['Jumlah pembayaran tidak boleh melebihi sisa tagihan partisipan.'],
+            ]);
+        }
+
         return DB::transaction(function () use ($splitBill, $participant, $amountPaid, $notes) {
             $participant->amount_paid = $amountPaid;
             $participant->notes = $notes ?? $participant->notes;
@@ -342,16 +387,26 @@ class SplitBillService
         }
 
         return DB::transaction(function () use ($splitBill, $creator, $account, $categoryId) {
+            // Serialise concurrent record-expense calls for the same bill so the
+            // my_transaction_id idempotency check below cannot be raced.
+            $freshBill = SplitBill::whereKey($splitBill->getKey())->lockForUpdate()->first();
+            if (!$freshBill) {
+                throw new \InvalidArgumentException("Tagihan tidak ditemukan.");
+            }
+
             // Jika sudah ada transaksi sebelumnya, update nominalnya
-            if ($splitBill->my_transaction_id) {
-                $existingTx = Transaction::find($splitBill->my_transaction_id);
+            if ($freshBill->my_transaction_id) {
+                $existingTx = Transaction::find($freshBill->my_transaction_id);
                 if ($existingTx) {
                     $diff = $creator->amount_owed - $existingTx->amount;
                     $existingTx->amount = $creator->amount_owed;
                     $existingTx->save();
 
-                    $account->balance -= $diff;
-                    $account->save();
+                    if ($diff > 0) {
+                        $account->decrement('balance', $diff);
+                    } elseif ($diff < 0) {
+                        $account->increment('balance', abs($diff));
+                    }
 
                     return $existingTx;
                 }
@@ -359,21 +414,20 @@ class SplitBillService
 
             // Buat transaksi pengeluaran baru
             $tx = Transaction::create([
-                'user_id'          => $splitBill->user_id,
+                'user_id'          => $freshBill->user_id,
                 'account_id'       => $account->id,
-                'category_id'      => $categoryId ?? $splitBill->category_id ?? 1,
+                'category_id'      => $categoryId ?? $freshBill->category_id ?? null,
                 'type'             => 'expense',
                 'amount'           => $creator->amount_owed,
-                'description'      => "Bagian Tagihan: {$splitBill->title}",
-                'transaction_date' => $splitBill->bill_date ?? Carbon::today(),
+                'description'      => "Bagian Tagihan: {$freshBill->title}",
+                'transaction_date' => $freshBill->bill_date ?? Carbon::today(),
             ]);
 
-            $account->balance -= $creator->amount_owed;
-            $account->save();
+            $account->decrement('balance', $creator->amount_owed);
 
-            $splitBill->my_transaction_id = $tx->id;
-            $splitBill->account_id = $account->id;
-            $splitBill->save();
+            $freshBill->my_transaction_id = $tx->id;
+            $freshBill->account_id = $account->id;
+            $freshBill->save();
 
             return $tx;
         });

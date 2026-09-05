@@ -23,6 +23,7 @@ class Goal extends Model
         'target_amount',
         'current_amount',
         'deadline',
+        'completion_bonus_awarded_at',
     ];
 
     protected $casts = [
@@ -30,6 +31,7 @@ class Goal extends Model
         'current_amount' => 'decimal:2',
         'is_pinned'     => 'boolean',
         'deadline'       => 'date',
+        'completion_bonus_awarded_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

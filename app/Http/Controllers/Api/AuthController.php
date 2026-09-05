@@ -238,11 +238,9 @@ class AuthController extends Controller
                 ], 422);
             }
 
-            // Jika user sudah terdaftar tapi BELUM diverifikasi → perbarui data & buat OTP baru
-            $existingUser->update([
-                'name'     => strip_tags($request->name),
-                'password' => Hash::make($request->password),
-            ]);
+            // Akun terdaftar yang belum diverifikasi: JANGAN pernah menimpa
+            // password/name dari request registrasi. Kredensial dan nama akun asli tetap dipertahankan.
+            // OTP verifikasi baru tetap di-generate dan dikirimkan ke email pemilik sah di bawah.
             $user = $existingUser;
         } else {
             // User baru
@@ -263,7 +261,13 @@ class AuthController extends Controller
         }
 
         return response()->json([
-            'data'    => ['user' => $user],
+            'data'    => [
+                'user' => [
+                    'id'    => $user->id,
+                    'name'  => $existingUser ? strip_tags($request->name) : $user->name,
+                    'email' => $user->email,
+                ],
+            ],
             'message' => 'Registrasi berhasil. Silakan cek email Anda untuk kode verifikasi.',
         ], 201);
     }
