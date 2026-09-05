@@ -7,6 +7,7 @@ use App\Models\IncomeSetting;
 use App\Models\Transaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class ProcessRecurringTransactions extends Command
 {
@@ -66,52 +67,80 @@ class ProcessRecurringTransactions extends Command
             }
 
             if ($shouldProcess) {
-                // Ensure account_id and category_id are not null for transactions table
-                $accountId = $setting->account_id;
-                if (!$accountId) {
-                    $firstAccount = \App\Models\Account::where('user_id', $setting->user_id)->first();
-                    $accountId = $firstAccount ? $firstAccount->id : null;
+                // Defense-in-depth: Validate account ownership
+                $account = null;
+                if ($setting->account_id) {
+                    $account = \App\Models\Account::where('id', $setting->account_id)
+                        ->where('user_id', $setting->user_id)
+                        ->first();
+
+                    if (!$account) {
+                        Log::warning("Security violation / Ownership mismatch: Setting #{$setting->id} (User #{$setting->user_id}) references account #{$setting->account_id} which does not belong to this user. Processing skipped.", [
+                            'setting_id' => $setting->id,
+                            'setting_user_id' => $setting->user_id,
+                            'account_id' => $setting->account_id,
+                        ]);
+                        $this->warn("Skipped setting #{$setting->id}: Account #{$setting->account_id} does not belong to User #{$setting->user_id}");
+                        $setting->update(['last_processed_date' => $today->toDateString()]);
+                        continue;
+                    }
+                } else {
+                    $account = \App\Models\Account::where('user_id', $setting->user_id)->first();
                 }
 
-                $categoryId = $setting->category_id;
-                if (!$categoryId) {
-                    $firstCategory = \App\Models\Category::where('user_id', $setting->user_id)
+                // Defense-in-depth: Validate category ownership
+                $category = null;
+                if ($setting->category_id) {
+                    $category = \App\Models\Category::where('id', $setting->category_id)
+                        ->where(function ($query) use ($setting) {
+                            $query->where('user_id', $setting->user_id)
+                                  ->orWhereNull('user_id');
+                        })
+                        ->first();
+
+                    if (!$category) {
+                        Log::warning("Security violation / Ownership mismatch: Setting #{$setting->id} (User #{$setting->user_id}) references category #{$setting->category_id} which does not belong to this user. Processing skipped.", [
+                            'setting_id' => $setting->id,
+                            'setting_user_id' => $setting->user_id,
+                            'category_id' => $setting->category_id,
+                        ]);
+                        $this->warn("Skipped setting #{$setting->id}: Category #{$setting->category_id} does not belong to User #{$setting->user_id}");
+                        $setting->update(['last_processed_date' => $today->toDateString()]);
+                        continue;
+                    }
+                } else {
+                    $category = \App\Models\Category::where('user_id', $setting->user_id)
                         ->where('type', $setting->type ?? 'income')
                         ->first();
-                    $categoryId = $firstCategory ? $firstCategory->id : null;
                 }
 
-                // If we still can't find account/category, skip and log error
-                if (!$accountId || !$categoryId) {
-                    Log::error("Skipped setting #{$setting->id} due to missing account or category.");
-                    // Update last_processed_date anyway to prevent infinite loop
+                // If we still can't find account or category, skip and log error
+                if (!$account || !$category) {
+                    Log::error("Skipped setting #{$setting->id} due to missing account or category for User #{$setting->user_id}.");
                     $setting->update(['last_processed_date' => $today->toDateString()]);
                     continue;
                 }
 
-                // Generate Transaksi
-                Transaction::create([
-                    'user_id' => $setting->user_id,
-                    'account_id' => $accountId,
-                    'category_id' => $categoryId,
-                    'type' => $setting->type ?? 'income', // default income for backward compat
-                    'amount' => $setting->amount,
-                    'description' => $setting->title ?? 'Transaksi Rutin (' . ucfirst($setting->period_type) . ')',
-                    'transaction_date' => $today->toDateString(),
-                ]);
+                // Generate Transaksi & Update saldo akun secara atomik
+                DB::transaction(function () use ($setting, $account, $category, $today) {
+                    Transaction::create([
+                        'user_id'          => $setting->user_id,
+                        'account_id'       => $account->id,
+                        'category_id'      => $category->id,
+                        'type'             => $setting->type ?? 'income',
+                        'amount'           => $setting->amount,
+                        'description'      => $setting->title ?? 'Transaksi Rutin (' . ucfirst($setting->period_type) . ')',
+                        'transaction_date' => $today->toDateString(),
+                    ]);
 
-                // Update saldo akun (AccountBalance)
-                $account = \App\Models\Account::find($accountId);
-                if ($account) {
                     if (($setting->type ?? 'income') === 'income') {
                         $account->increment('balance', $setting->amount);
                     } else {
                         $account->decrement('balance', $setting->amount);
                     }
-                }
 
-                // Update last_processed_date
-                $setting->update(['last_processed_date' => $today->toDateString()]);
+                    $setting->update(['last_processed_date' => $today->toDateString()]);
+                });
 
                 $processedCount++;
                 $this->info("Processed setting #{$setting->id} for User #{$setting->user_id}");

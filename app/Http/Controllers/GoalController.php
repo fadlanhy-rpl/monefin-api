@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class GoalController extends Controller
 {
@@ -28,8 +29,10 @@ class GoalController extends Controller
     {
         $this->authorizeGoal($request, $goal);
 
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
-            'account_id' => ['required', 'exists:accounts,id'],
+            'account_id' => ['required', Rule::exists('accounts', 'id')->where('user_id', $userId)],
             'amount'     => ['required', 'numeric', 'min:0.01'],
         ]);
 
@@ -115,8 +118,10 @@ class GoalController extends Controller
     {
         $this->authorizeGoal($request, $goal);
 
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
-            'account_id' => ['required', 'exists:accounts,id'],
+            'account_id' => ['required', Rule::exists('accounts', 'id')->where('user_id', $userId)],
             'amount'     => ['required', 'numeric', 'min:0.01'],
         ]);
 

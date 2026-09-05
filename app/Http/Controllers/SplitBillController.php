@@ -204,11 +204,17 @@ class SplitBillController extends Controller
      */
     public function recordExpense(Request $request, int $id): JsonResponse
     {
-        $splitBill = SplitBill::where('user_id', $request->user()->id)->findOrFail($id);
+        $userId = $request->user()->id;
+        $splitBill = SplitBill::where('user_id', $userId)->findOrFail($id);
 
         $validated = $request->validate([
-            'account_id'  => ['required', 'exists:accounts,id'],
-            'category_id' => ['nullable', 'exists:categories,id'],
+            'account_id'  => ['required', Rule::exists('accounts', 'id')->where('user_id', $userId)],
+            'category_id' => [
+                'nullable',
+                Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                    $query->where('user_id', $userId)->orWhereNull('user_id');
+                }),
+            ],
         ]);
 
         $tx = $this->splitBillService->recordMyShareToTransaction(
