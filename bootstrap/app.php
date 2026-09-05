@@ -15,6 +15,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // Jangan redirect guest ke route('login') yang tidak ada pada API stateless
         $middleware->redirectGuestsTo(fn (Request $request) => null);
+
+        // Security headers untuk semua API response
+        $middleware->appendToGroup('api', \App\Http\Middleware\SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

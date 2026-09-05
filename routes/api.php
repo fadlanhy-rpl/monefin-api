@@ -29,15 +29,15 @@ Route::middleware('throttle:60,1')->group(function () {
     Route::post('/auth/reset-password',  [AuthController::class, 'resetPassword']);
     Route::post('/auth/verify-2fa',      [AuthController::class, 'verify2fa']);
     Route::post('/auth/secure-account',  [AuthController::class, 'secureAccount']);
+
+    // ─── Backward-compatible aliases (agar kode frontend lama tidak break) ────
+    Route::post('/login',    [AuthController::class, 'login']);
+    Route::post('/register', [AuthController::class, 'register']);
 });
 
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 Route::get('/auth/google',          [AuthController::class, 'redirectToGoogle']);
 Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback']);
-
-// ─── Backward-compatible aliases (agar kode frontend lama tidak break) ────────
-Route::post('/login',    [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
 
 // ─── Protected Routes (requires Sanctum token) ───────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
