@@ -23,7 +23,7 @@ class OtpCode extends Model
         // Bersihkan OTP lama untuk email dan tipe yang sama
         static::where('email', $email)->where('type', $type)->delete();
 
-        $plainOtp = (string) rand(100000, 999999);
+        $plainOtp = (string) random_int(100000, 999999);
 
         static::create([
             'email'      => $email,

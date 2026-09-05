@@ -9,6 +9,7 @@ use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Validation\Rule;
 
 class BudgetController extends Controller
 {
@@ -44,14 +45,18 @@ class BudgetController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
-            'category_id'  => ['required', 'exists:categories,id'],
+            'category_id'  => ['required', Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                $query->where('user_id', $userId)->orWhereNull('user_id');
+            })],
             'month'        => ['required', 'integer', 'min:1', 'max:12'],
             'year'         => ['required', 'integer', 'min:2000'],
             'limit_amount' => ['required', 'numeric', 'min:0.01'],
         ]);
 
-        $validated['user_id'] = $request->user()->id;
+        $validated['user_id'] = $userId;
 
         $budget = Budget::updateOrCreate(
             [

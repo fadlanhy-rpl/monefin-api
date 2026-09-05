@@ -7,6 +7,7 @@ use App\Models\SplitBillParticipant;
 use App\Services\SplitBillService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class SplitBillController extends Controller
 {
@@ -62,12 +63,16 @@ class SplitBillController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
             'title'              => ['required', 'string', 'max:255'],
             'description'        => ['nullable', 'string'],
             'bill_date'          => ['required', 'date'],
-            'account_id'         => ['nullable', 'exists:accounts,id'],
-            'category_id'        => ['nullable', 'exists:categories,id'],
+            'account_id'         => ['nullable', Rule::exists('accounts', 'id')->where('user_id', $userId)],
+            'category_id'        => ['nullable', Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                $query->where('user_id', $userId)->orWhereNull('user_id');
+            })],
             'subtotal'           => ['nullable', 'numeric', 'min:0'],
             'tax_percent'        => ['nullable', 'numeric', 'min:0', 'max:100'],
             'tax_amount'         => ['nullable', 'numeric', 'min:0'],

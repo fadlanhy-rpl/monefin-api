@@ -224,7 +224,7 @@ class AuthController extends Controller
         $request->validate([
             'name'     => ['required', 'string', 'max:255'],
             'email'    => 'required|email|max:255',
-            'password' => 'required|min:6',
+            'password' => 'required|min:8',
         ]);
 
         $existingUser = User::where('email', $request->email)->first();
@@ -362,7 +362,7 @@ class AuthController extends Controller
                 }
             }
 
-            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+            $frontendUrl = config('services.frontend_url', env('FRONTEND_URL', 'http://localhost:3000'));
 
             // Jika user mengaktifkan 2FA, kirim OTP dan redirect ke halaman verifikasi
             if ($user->two_factor_enabled) {
@@ -393,7 +393,7 @@ class AuthController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Google Login Error: ' . $e->getMessage());
-            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+            $frontendUrl = config('services.frontend_url', env('FRONTEND_URL', 'http://localhost:3000'));
             return redirect($frontendUrl . '/login?error=' . urlencode('Login dengan Google gagal. Silakan coba lagi.'));
         }
     }
@@ -561,21 +561,24 @@ class AuthController extends Controller
             return $penaltyResponse;
         }
 
+        // Respons generik untuk mencegah email enumeration.
+        $genericResponse = response()->json(['message' => 'Jika email terdaftar, kode OTP akan segera dikirimkan.']);
+
         $user = User::where('email', $request->email)->first();
 
         if (!$user) {
-            return response()->json(['message' => 'User tidak ditemukan.'], 404);
+            return $genericResponse;
         }
 
         $otp = OtpCode::generateFor($request->email, $request->type, 5);
 
         try {
             Mail::to($request->email)->send(new SendOtpMail($otp, $request->type));
-            return response()->json(['message' => 'Kode OTP baru telah dikirim ke email Anda.']);
         } catch (\Exception $e) {
             Log::error('Mail Error (Resend OTP): ' . $e->getMessage());
-            return response()->json(['message' => 'Gagal mengirim email. Silakan coba lagi nanti.'], 500);
         }
+
+        return $genericResponse;
     }
 
     // =========================================================
@@ -590,27 +593,27 @@ class AuthController extends Controller
     {
         $request->validate(['email' => 'required|email']);
 
+        // Respons generik 200 OK untuk mencegah email enumeration.
+        // Attacker tidak bisa membedakan apakah email terdaftar atau tidak.
+        $genericResponse = response()->json([
+            'message' => 'Jika email terdaftar, kode OTP akan segera dikirimkan.',
+        ]);
+
         $user = User::where('email', $request->email)->first();
 
-        if (!$user) {
-            return response()->json(['message' => 'Email tidak terdaftar.'], 404);
-        }
-
-        if (!$user->password) {
-            return response()->json([
-                'message' => 'Akun ini terdaftar menggunakan Google dan belum memiliki password. Silakan login dengan Google dan atur password di Pengaturan.',
-            ], 400);
+        if (!$user || !$user->password) {
+            return $genericResponse;
         }
 
         $otp = OtpCode::generateFor($request->email, 'reset', 5);
 
         try {
             Mail::to($request->email)->send(new SendOtpMail($otp, 'reset'));
-            return response()->json(['message' => 'Kode OTP reset password telah dikirim ke email Anda.']);
         } catch (\Exception $e) {
             Log::error('Mail Error (Forgot Password): ' . $e->getMessage());
-            return response()->json(['message' => 'Gagal mengirim email.'], 500);
         }
+
+        return $genericResponse;
     }
 
     // =========================================================
@@ -660,11 +663,22 @@ class AuthController extends Controller
      */
     public function destroy(Request $request): JsonResponse
     {
+        $request->validate([
+            'password' => ['required', 'string'],
+        ]);
+
         $user = $request->user();
-        
+
+        // Verifikasi ulang identitas sebelum aksi destruktif
+        if (!Hash::check($request->password, $user->password)) {
+            throw ValidationException::withMessages([
+                'password' => ['Password tidak valid. Konfirmasi gagal.'],
+            ]);
+        }
+
         // Revoke all tokens
         $user->tokens()->delete();
-        
+
         // Delete the user (cascades to all related data)
         $user->delete();
 

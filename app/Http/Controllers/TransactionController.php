@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class TransactionController extends Controller
 {
@@ -42,17 +43,21 @@ class TransactionController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
-            'account_id'       => ['required', 'exists:accounts,id'],
-            'category_id'      => ['required', 'exists:categories,id'],
-            'goal_id'          => ['nullable', 'exists:goals,id'],
+            'account_id'       => ['required', Rule::exists('accounts', 'id')->where('user_id', $userId)],
+            'category_id'      => ['required', Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                $query->where('user_id', $userId)->orWhereNull('user_id');
+            })],
+            'goal_id'          => ['nullable', Rule::exists('goals', 'id')->where('user_id', $userId)],
             'type'             => ['required', 'in:income,expense'],
             'amount'           => ['required', 'numeric', 'min:0.01'],
             'description'      => ['nullable', 'string', 'max:500'],
             'transaction_date' => ['required', 'date'],
         ]);
 
-        $validated['user_id'] = $request->user()->id;
+        $validated['user_id'] = $userId;
 
         $transaction = Transaction::create($validated);
 
@@ -86,10 +91,14 @@ class TransactionController extends Controller
     {
         $this->authorizeTransaction($request, $transaction);
 
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
-            'account_id'       => ['sometimes', 'exists:accounts,id'],
-            'category_id'      => ['sometimes', 'exists:categories,id'],
-            'goal_id'          => ['nullable', 'exists:goals,id'],
+            'account_id'       => ['sometimes', Rule::exists('accounts', 'id')->where('user_id', $userId)],
+            'category_id'      => ['sometimes', Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                $query->where('user_id', $userId)->orWhereNull('user_id');
+            })],
+            'goal_id'          => ['nullable', Rule::exists('goals', 'id')->where('user_id', $userId)],
             'type'             => ['sometimes', 'in:income,expense'],
             'amount'           => ['sometimes', 'numeric', 'min:0.01'],
             'description'      => ['nullable', 'string', 'max:500'],
