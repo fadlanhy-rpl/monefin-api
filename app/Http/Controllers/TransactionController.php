@@ -9,6 +9,7 @@ use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -57,12 +58,33 @@ class TransactionController extends Controller
             'transaction_date' => ['required', 'date'],
         ]);
 
+        $idempotencyKey = "tx_dedup:{$userId}:" . md5(json_encode([
+            $validated['account_id'],
+            $validated['amount'],
+            $validated['type'],
+            $validated['category_id'],
+            $validated['transaction_date'],
+            $validated['description'] ?? '',
+        ]));
+
+        $lock = Cache::lock($idempotencyKey, 3);
+        if (!$lock->get()) {
+            return response()->json([
+                'message' => 'Transaksi serupa sedang diproses. Mohon tunggu 3 detik.',
+            ], 429);
+        }
+
         $validated['user_id'] = $userId;
 
         $transaction = Transaction::create($validated);
 
         // Harus sync — saldo akun mempengaruhi tampilan yang langsung di-fetch setelah ini
         $this->updateAccountBalance($transaction->account_id, $transaction->type, $transaction->amount);
+
+        // Invalidasi cache dashboard langsung agar realtime
+        foreach (['7days', '30days', 'this_month', 'this_year'] as $r) {
+            Cache::forget("dashboard_summary:{$userId}:{$r}");
+        }
 
         // Semua side effects (gamifikasi, notifikasi, spending analysis, cache) berjalan di background
         ProcessTransactionSideEffects::dispatch(
