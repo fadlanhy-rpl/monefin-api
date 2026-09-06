@@ -8,6 +8,7 @@ use App\Models\BalanceAdjustment;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Validation\Rule;
 
 class AccountController extends Controller
 {
@@ -92,9 +93,11 @@ class AccountController extends Controller
      */
     public function reorder(Request $request): JsonResponse
     {
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
             'accounts' => ['required', 'array'],
-            'accounts.*.id' => ['required', 'integer', 'exists:accounts,id'],
+            'accounts.*.id' => ['required', 'integer', Rule::exists('accounts', 'id')->where('user_id', $userId)],
             'accounts.*.sort_order' => ['required', 'integer'],
         ]);
 

@@ -45,7 +45,7 @@ class OpenAiCompatibleProvider implements AiProvider
 
     public function chat(array $messages, float $temperature = 0.7): string
     {
-        $verifySSL = config('app.env') === 'production';
+        $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
         try {
             $response = Http::timeout(60)
@@ -128,7 +128,7 @@ class OpenAiCompatibleProvider implements AiProvider
 
     public function streamChat(array $messages, callable $onChunk, float $temperature = 0.7): void
     {
-        $verifySSL = config('app.env') === 'production';
+        $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
         try {
             $client = new \GuzzleHttp\Client([

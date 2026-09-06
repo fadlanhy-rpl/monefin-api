@@ -145,10 +145,20 @@ class GamificationController extends Controller
             ], 400);
         }
 
-        $userQuest->update([
-            'is_claimed' => true,
-            'claimed_at' => Carbon::now(),
-        ]);
+        // Compare-and-set on is_claimed: exactly one concurrent caller wins
+        $claimed = UserQuest::whereKey($userQuest->getKey())
+            ->where('is_claimed', false)
+            ->update([
+                'is_claimed' => true,
+                'claimed_at' => Carbon::now(),
+            ]);
+
+        if ($claimed !== 1) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Hadiah misi ini sudah pernah diklaim.',
+            ], 400);
+        }
 
         $xpResult = $this->gamificationService->awardXP(
             $user, 

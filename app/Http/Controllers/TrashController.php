@@ -62,7 +62,21 @@ class TrashController extends Controller
 
         DB::beginTransaction();
         try {
-            $model->restore();
+            // Claim the restore atomically: only one concurrent caller may move a
+            // given row from trashed back to live, and only that caller re-applies
+            // the balance effect below.
+            $claimed = $model->newQuery()->getQuery()
+                ->from((new $model)->getTable())
+                ->whereKey($model->getKey())
+                ->whereNotNull('deleted_at')
+                ->update(['deleted_at' => null]);
+
+            if ($claimed !== 1) {
+                DB::rollBack();
+                return response()->json([
+                    'message' => ucfirst($type) . ' berhasil dipulihkan.'
+                ]);
+            }
 
             // If it's a transaction, we need to re-apply the balance to the account
             if ($type === 'transaction') {
@@ -76,11 +90,10 @@ class TrashController extends Controller
                 
                 if ($account) {
                     if ($model->type === 'income') {
-                        $account->balance += $model->amount;
+                        $account->increment('balance', $model->amount);
                     } else if ($model->type === 'expense') {
-                        $account->balance -= $model->amount;
+                        $account->decrement('balance', $model->amount);
                     }
-                    $account->save();
                 }
                 
                 $this->spending->recordNotification($request->user());

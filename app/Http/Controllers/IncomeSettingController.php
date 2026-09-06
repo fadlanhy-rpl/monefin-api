@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Resources\IncomeSettingResource;
 use App\Models\IncomeSetting;
 use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class IncomeSettingController extends Controller
 {
@@ -22,7 +24,7 @@ class IncomeSettingController extends Controller
             ->where('is_active', true)
             ->get();
 
-        return response()->json(['data' => $settings]);
+        return response()->json(['data' => IncomeSettingResource::collection($settings)]);
     }
 
     /**
@@ -30,11 +32,21 @@ class IncomeSettingController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
             'type'           => ['required', 'in:income,expense'],
             'title'          => ['required', 'string', 'max:255'],
-            'account_id'     => ['nullable', 'exists:accounts,id'],
-            'category_id'    => ['nullable', 'exists:categories,id'],
+            'account_id'     => [
+                'nullable',
+                Rule::exists('accounts', 'id')->where('user_id', $userId),
+            ],
+            'category_id'    => [
+                'nullable',
+                Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                    $query->where('user_id', $userId)->orWhereNull('user_id');
+                }),
+            ],
             'amount'         => ['required', 'numeric', 'min:0.01'],
             'period_type'    => ['required', 'in:weekly,monthly,daily'],
             'effective_date' => ['nullable', 'date'],
@@ -62,7 +74,7 @@ class IncomeSettingController extends Controller
 
         return response()->json([
             'message' => 'Transaksi rutin berhasil ditambahkan.',
-            'data'    => $setting->load(['account', 'category']),
+            'data'    => new IncomeSettingResource($setting->load(['account', 'category'])),
         ], 201);
     }
 
@@ -75,11 +87,21 @@ class IncomeSettingController extends Controller
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
+        $userId = $request->user()->id;
+
         $validated = $request->validate([
             'type'           => ['sometimes', 'in:income,expense'],
             'title'          => ['sometimes', 'string', 'max:255'],
-            'account_id'     => ['nullable', 'exists:accounts,id'],
-            'category_id'    => ['nullable', 'exists:categories,id'],
+            'account_id'     => [
+                'nullable',
+                Rule::exists('accounts', 'id')->where('user_id', $userId),
+            ],
+            'category_id'    => [
+                'nullable',
+                Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                    $query->where('user_id', $userId)->orWhereNull('user_id');
+                }),
+            ],
             'amount'         => ['sometimes', 'numeric', 'min:0.01'],
             'period_type'    => ['sometimes', 'in:weekly,monthly,daily'],
             'effective_date' => ['nullable', 'date'],
@@ -90,7 +112,7 @@ class IncomeSettingController extends Controller
 
         return response()->json([
             'message' => 'Transaksi rutin berhasil diperbarui.',
-            'data'    => $incomeSetting->fresh(['account', 'category']),
+            'data'    => new IncomeSettingResource($incomeSetting->fresh(['account', 'category'])),
         ]);
     }
 

@@ -65,6 +65,16 @@ class ProcessTransactionSideEffects implements ShouldQueue
         GamificationService    $gamification,
         SpendingAnalysisService $spending,
     ): void {
+        // Side effects must run exactly once per transaction+action. The job is
+        // retryable (public int $tries = 2), and Cache::add() is an atomic
+        // insertOrIgnore on the database store, so only the first attempt claims it.
+        $effectKey = sprintf('tx_side_effects:%s:%d:%s',
+            $this->user->id, $this->transaction->id, $this->action);
+
+        if (! Cache::add($effectKey, 1, 86400)) {
+            return;
+        }
+
         // 1. Rekam analisis spending
         $this->runSafe(
             fn() => $spending->recordNotification($this->user),
@@ -161,23 +171,17 @@ class ProcessTransactionSideEffects implements ShouldQueue
 
         $periodLabel = "cat_{$tx->category_id}_" . date('Y-m') . "_{$thresholdLevel}";
 
-        // Cegah duplikasi alert untuk threshold yang sama di bulan yang sama
-        $alreadySent = SpendingNotification::where('user_id', $this->user->id)
-            ->where('type', 'budget_alert')
-            ->where('period_label', $periodLabel)
-            ->exists();
-
-        if ($alreadySent) {
-            return;
-        }
-
+        // Cegah duplikasi alert untuk threshold yang sama di bulan yang sama.
+        // insertOrIgnore() is atomic against the unique index on
+        // (user_id, type, period_label): exactly one concurrent worker gets an
+        // affected-rows count of 1 and may therefore queue the email.
         $catName    = $tx->category?->name ?? 'Kategori';
         $isCritical = $thresholdLevel === 100;
         $message    = $isCritical
             ? "Peringatan Kritis: Pengeluaran {$catName} telah mencapai 100% dari limit bulan ini!"
             : "Peringatan: Pengeluaran {$catName} mencapai " . round($percent) . "% dari limit bulan ini!";
 
-        SpendingNotification::create([
+        $created = SpendingNotification::insertOrIgnore([
             'user_id'       => $this->user->id,
             'type'          => 'budget_alert',
             'period_type'   => 'monthly',
@@ -185,7 +189,13 @@ class ProcessTransactionSideEffects implements ShouldQueue
             'spent_percent' => $percent,
             'message'       => $message,
             'is_read'       => false,
+            'created_at'    => now(),
+            'updated_at'    => now(),
         ]);
+
+        if ($created !== 1) {
+            return;   // another worker already sent this threshold alert
+        }
 
         // Kirim email secara async (BudgetAlertMail implements ShouldQueue)
         Mail::to($this->user->email)->queue(

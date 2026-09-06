@@ -70,7 +70,9 @@ class BudgetController extends Controller
 
         try {
             $user = $request->user();
-            $this->gamification->awardXP($user, 25, 'Membuat/Memperbarui Anggaran');
+            if ($budget->wasRecentlyCreated) {
+                $this->gamification->awardXP($user, 25, 'Membuat Anggaran');
+            }
             $this->gamification->recordActivity($user);
             $budgetCount = Budget::where('user_id', $user->id)->count();
             $this->gamification->updateAchievementProgress($user, 'budget_created', $budgetCount);

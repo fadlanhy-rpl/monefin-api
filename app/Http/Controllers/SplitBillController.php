@@ -88,8 +88,8 @@ class SplitBillController extends Controller
             'participants.*.name'          => ['required', 'string'],
             'participants.*.phone_number'  => ['nullable', 'string'],
             'participants.*.is_creator'    => ['nullable', 'boolean'],
-            'participants.*.amount_owed'   => ['nullable', 'numeric'],
-            'participants.*.percentage'    => ['nullable', 'numeric'],
+            'participants.*.amount_owed'   => ['nullable', 'numeric', 'min:0'],
+            'participants.*.percentage'    => ['nullable', 'numeric', 'min:0', 'max:100'],
             'items'                        => ['nullable', 'array'],
             'items.*.name'                 => ['required_with:items', 'string'],
             'items.*.price'                => ['required_with:items', 'numeric', 'min:0'],
@@ -97,7 +97,14 @@ class SplitBillController extends Controller
             'items.*.participant_ids'      => ['nullable', 'array'],
         ]);
 
-        $splitBill = $this->splitBillService->createSplitBill($request->user(), $validated);
+        try {
+            $splitBill = $this->splitBillService->createSplitBill($request->user(), $validated);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'status'  => 'success',
@@ -125,8 +132,8 @@ class SplitBillController extends Controller
             'participants.*.name'          => ['required', 'string'],
             'participants.*.phone_number'  => ['nullable', 'string'],
             'participants.*.is_creator'    => ['nullable', 'boolean'],
-            'participants.*.amount_owed'   => ['nullable', 'numeric'],
-            'participants.*.percentage'    => ['nullable', 'numeric'],
+            'participants.*.amount_owed'   => ['nullable', 'numeric', 'min:0'],
+            'participants.*.percentage'    => ['nullable', 'numeric', 'min:0', 'max:100'],
             'items'                        => ['nullable', 'array'],
             'items.*.name'                 => ['required_with:items', 'string'],
             'items.*.price'                => ['required_with:items', 'numeric', 'min:0'],
@@ -134,7 +141,14 @@ class SplitBillController extends Controller
             'items.*.participant_ids'      => ['nullable', 'array'],
         ]);
 
-        $result = $this->splitBillService->calculateSplit($validated);
+        try {
+            $result = $this->splitBillService->calculateSplit($validated);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => $e->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'status' => 'success',
@@ -204,11 +218,17 @@ class SplitBillController extends Controller
      */
     public function recordExpense(Request $request, int $id): JsonResponse
     {
-        $splitBill = SplitBill::where('user_id', $request->user()->id)->findOrFail($id);
+        $userId = $request->user()->id;
+        $splitBill = SplitBill::where('user_id', $userId)->findOrFail($id);
 
         $validated = $request->validate([
-            'account_id'  => ['required', 'exists:accounts,id'],
-            'category_id' => ['nullable', 'exists:categories,id'],
+            'account_id'  => ['required', Rule::exists('accounts', 'id')->where('user_id', $userId)],
+            'category_id' => [
+                'nullable',
+                Rule::exists('categories', 'id')->where(function ($query) use ($userId) {
+                    $query->where('user_id', $userId)->orWhereNull('user_id');
+                }),
+            ],
         ]);
 
         $tx = $this->splitBillService->recordMyShareToTransaction(

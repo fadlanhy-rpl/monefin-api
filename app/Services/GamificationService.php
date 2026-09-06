@@ -114,33 +114,37 @@ class GamificationService
     {
         if ($amount <= 0) return ['awarded' => 0];
 
-        $profile = $this->getOrCreateProfile($user);
-        $oldLevel = $profile->level;
-        $newXp = $profile->xp + $amount;
-        $newLevel = $this->calculateLevel($newXp);
+        return DB::transaction(function () use ($user, $amount, $reason) {
+            $profile = UserGamification::where('user_id', $user->id)->lockForUpdate()->first()
+                ?? $this->getOrCreateProfile($user);
 
-        $leveledUp = $newLevel > $oldLevel;
+            $oldLevel = $profile->level;
+            $newXp = $profile->xp + $amount;
+            $newLevel = $this->calculateLevel($newXp);
 
-        $profile->update([
-            'xp'    => $newXp,
-            'level' => $newLevel,
-        ]);
+            $leveledUp = $newLevel > $oldLevel;
 
-        // Berikan bonus Streak Freeze jika mencapai kelipatan Level 5
-        if ($leveledUp && $newLevel % 5 === 0) {
-            $profile->increment('streak_freezes_available', 1);
-        }
+            $profile->update([
+                'xp'    => $newXp,
+                'level' => $newLevel,
+            ]);
 
-        $this->invalidateUserCache($user);
+            // Berikan bonus Streak Freeze jika mencapai kelipatan Level 5
+            if ($leveledUp && $newLevel % 5 === 0) {
+                $profile->increment('streak_freezes_available', 1);
+            }
 
-        return [
-            'awarded_xp'  => $amount,
-            'total_xp'    => $newXp,
-            'old_level'   => $oldLevel,
-            'level'       => $newLevel,
-            'leveled_up'  => $leveledUp,
-            'reason'      => $reason,
-        ];
+            $this->invalidateUserCache($user);
+
+            return [
+                'awarded_xp'  => $amount,
+                'total_xp'    => $newXp,
+                'old_level'   => $oldLevel,
+                'level'       => $newLevel,
+                'leveled_up'  => $leveledUp,
+                'reason'      => $reason,
+            ];
+        });
     }
 
     /**
