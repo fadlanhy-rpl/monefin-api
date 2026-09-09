@@ -228,7 +228,9 @@ class GamificationService
         $streakSlugs = [
             'streak_3'   => 3,
             'streak_7'   => 7,
+            'streak_14'  => 14,
             'streak_30'  => 30,
+            'streak_60'  => 60,
             'streak_100' => 100,
         ];
 
@@ -288,6 +290,12 @@ class GamificationService
             ->where('target_type', $targetType)
             ->get();
 
+        if ($activeQuests->isEmpty()) {
+            return;
+        }
+
+        $hasChanges = false;
+
         foreach ($activeQuests as $quest) {
             $periodKey = $quest->type === 'daily' ? $dailyKey : $weeklyKey;
 
@@ -316,9 +324,12 @@ class GamificationService
             }
 
             $userQuest->save();
+            $hasChanges = true;
         }
 
-        $this->invalidateUserCache($user);
+        if ($hasChanges) {
+            $this->invalidateUserCache($user);
+        }
     }
 
     /**

@@ -3,12 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Models\Transaction;
+use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
+    public function __construct(
+        private GamificationService $gamification
+    ) {}
+
     /**
      * GET /api/reports/compare
      * Perbandingan income, expense, savings antar bulan.
@@ -21,6 +26,9 @@ class ReportController extends Controller
     public function compare(Request $request): JsonResponse
     {
         $user = $request->user();
+
+        // Rekam aksi misi evaluasi / review laporan finansial
+        $this->gamification->recordQuestAction($user, 'check_analytics', 1);
 
         if ($request->start_month && $request->end_month) {
             [$startYear, $startMonth] = explode('-', $request->start_month);

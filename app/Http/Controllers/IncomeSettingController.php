@@ -19,10 +19,15 @@ class IncomeSettingController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $settings = $request->user()->incomeSettings()
+        $query = $request->user()->incomeSettings()
             ->with(['account', 'category'])
-            ->where('is_active', true)
-            ->get();
+            ->orderByDesc('created_at');
+
+        if ($request->has('is_active')) {
+            $query->where('is_active', filter_var($request->query('is_active'), FILTER_VALIDATE_BOOLEAN));
+        }
+
+        $settings = $query->get();
 
         return response()->json(['data' => IncomeSettingResource::collection($settings)]);
     }
