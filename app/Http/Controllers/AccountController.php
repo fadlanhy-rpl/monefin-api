@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Resources\AccountResource;
 use App\Models\Account;
 use App\Models\BalanceAdjustment;
+use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -12,6 +13,10 @@ use Illuminate\Validation\Rule;
 
 class AccountController extends Controller
 {
+    public function __construct(
+        private GamificationService $gamification
+    ) {}
+
     public function index(Request $request): AnonymousResourceCollection
     {
         $accounts = $request->user()
@@ -36,6 +41,13 @@ class AccountController extends Controller
         ]);
 
         $account = $request->user()->accounts()->create($validated);
+
+        try {
+            $count = $request->user()->accounts()->count();
+            $this->gamification->updateAchievementProgress($request->user(), 'multi_account', $count);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Gamification Error (Store Account): ' . $e->getMessage());
+        }
 
         return response()->json([
             'message' => 'Akun berhasil dibuat.',

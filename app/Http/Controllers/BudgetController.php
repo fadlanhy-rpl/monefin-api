@@ -74,8 +74,10 @@ class BudgetController extends Controller
                 $this->gamification->awardXP($user, 25, 'Membuat Anggaran');
             }
             $this->gamification->recordActivity($user);
+            $this->gamification->recordQuestAction($user, 'create_budget', 1);
             $budgetCount = Budget::where('user_id', $user->id)->count();
             $this->gamification->updateAchievementProgress($user, 'budget_created', $budgetCount);
+            $this->gamification->updateAchievementProgress($user, 'budget_all_rounder', $budgetCount);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Gamification Error (Store Budget): ' . $e->getMessage());
         }

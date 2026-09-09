@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Transaction;
+use App\Services\GamificationService;
 use App\Services\SpendingAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,7 +12,10 @@ use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
-    public function __construct(private SpendingAnalysisService $spending) {}
+    public function __construct(
+        private SpendingAnalysisService $spending,
+        private GamificationService $gamification
+    ) {}
 
     /**
      * GET /api/dashboard/summary
@@ -28,6 +32,9 @@ class DashboardController extends Controller
     public function summary(Request $request): JsonResponse
     {
         $user = $request->user();
+
+        // Rekam aksi misi evaluasi / review finansial
+        $this->gamification->recordQuestAction($user, 'check_analytics', 1);
 
         $range     = $request->query('range', '30days');
         $startDate = null;
@@ -151,18 +158,28 @@ class DashboardController extends Controller
         }
 
         $daysMap     = [2 => 'Sen', 3 => 'Sel', 4 => 'Rab', 5 => 'Kam', 6 => 'Jum', 7 => 'Sab', 1 => 'Min'];
+
+        // Cari nilai pengeluaran maksimum di seluruh hari (minggu ini & minggu lalu)
+        $maxWeekly = 0;
+        foreach ([2, 3, 4, 5, 6, 7, 1] as $idx) {
+            $thisAmt = (float) ($thisWeekGrouped[$idx] ?? 0);
+            $lastAmt = (float) ($lastWeekGrouped[$idx] ?? 0);
+            if ($thisAmt > $maxWeekly) $maxWeekly = $thisAmt;
+            if ($lastAmt > $maxWeekly) $maxWeekly = $lastAmt;
+        }
+        $maxWeekly = max($maxWeekly, 1);
+
         $weeklyTrend = [];
         foreach ([2, 3, 4, 5, 6, 7, 1] as $idx) {
             $thisAmt = (float) ($thisWeekGrouped[$idx] ?? 0);
             $lastAmt = (float) ($lastWeekGrouped[$idx] ?? 0);
-            $max     = max($thisAmt, $lastAmt, 1);
 
             $weeklyTrend[] = [
                 'label'    => $daysMap[$idx],
                 'thisAmt'  => $thisAmt,
                 'lastAmt'  => $lastAmt,
-                'thisWeek' => round(($thisAmt / $max) * 100),
-                'last'     => round(($lastAmt / $max) * 100),
+                'thisWeek' => round(($thisAmt / $maxWeekly) * 100),
+                'last'     => round(($lastAmt / $maxWeekly) * 100),
             ];
         }
 
@@ -195,6 +212,20 @@ class DashboardController extends Controller
             ->pluck('total', 'period')
             ->toArray();
 
+        // Cari nilai pengeluaran maksimum di seluruh 6 bulan (tahun ini & tahun lalu)
+        $maxMonthly = 0;
+        for ($i = 0; $i < 6; $i++) {
+            $currentDate       = $startMonth->copy()->addMonths($i);
+            $periodKeyThisYear = $currentDate->format('Y-m');
+            $periodKeyLastYear = $currentDate->copy()->subYear()->format('Y-m');
+
+            $thisAmt = (float) ($thisYearMonthSums[$periodKeyThisYear] ?? 0);
+            $lastAmt = (float) ($lastYearMonthSums[$periodKeyLastYear] ?? 0);
+            if ($thisAmt > $maxMonthly) $maxMonthly = $thisAmt;
+            if ($lastAmt > $maxMonthly) $maxMonthly = $lastAmt;
+        }
+        $maxMonthly = max($maxMonthly, 1);
+
         $monthlyTrend = [];
         for ($i = 0; $i < 6; $i++) {
             $currentDate       = $startMonth->copy()->addMonths($i);
@@ -206,14 +237,13 @@ class DashboardController extends Controller
 
             $thisAmt = (float) ($thisYearMonthSums[$periodKeyThisYear] ?? 0);
             $lastAmt = (float) ($lastYearMonthSums[$periodKeyLastYear] ?? 0);
-            $max     = max($thisAmt, $lastAmt, 1);
 
             $monthlyTrend[] = [
                 'label'    => $monthLabel,
                 'thisAmt'  => $thisAmt,
                 'lastAmt'  => $lastAmt,
-                'thisWeek' => round(($thisAmt / $max) * 100),
-                'last'     => round(($lastAmt / $max) * 100),
+                'thisWeek' => round(($thisAmt / $maxMonthly) * 100),
+                'last'     => round(($lastAmt / $maxMonthly) * 100),
             ];
         }
 

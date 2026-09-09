@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\SplitBill;
 use App\Models\SplitBillParticipant;
+use App\Services\GamificationService;
 use App\Services\SplitBillService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,7 +13,8 @@ use Illuminate\Validation\Rule;
 class SplitBillController extends Controller
 {
     public function __construct(
-        protected SplitBillService $splitBillService
+        protected SplitBillService $splitBillService,
+        protected GamificationService $gamification
     ) {}
 
     /**
@@ -99,6 +101,11 @@ class SplitBillController extends Controller
 
         try {
             $splitBill = $this->splitBillService->createSplitBill($request->user(), $validated);
+            $this->gamification->recordQuestAction($request->user(), 'split_bill', 1);
+
+            $billCount = SplitBill::where('user_id', $request->user()->id)->count();
+            $this->gamification->updateAchievementProgress($request->user(), 'first_split_bill', 1);
+            $this->gamification->updateAchievementProgress($request->user(), 'split_bill_5', $billCount);
         } catch (\InvalidArgumentException $e) {
             return response()->json([
                 'status'  => 'error',

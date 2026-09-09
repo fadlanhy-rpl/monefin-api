@@ -104,6 +104,10 @@ class GoalController extends Controller
             $this->gamification->recordQuestAction($user, 'deposit_goal', 1);
             $this->gamification->updateAchievementProgress($user, 'first_deposit', 1);
 
+            $depositCount = \App\Models\Transaction::where('user_id', $user->id)->whereNotNull('goal_id')->count();
+            $this->gamification->updateAchievementProgress($user, 'savings_depositor_5', $depositCount);
+            $this->gamification->updateAchievementProgress($user, 'savings_depositor_10', $depositCount);
+
             $freshGoal = $goal->fresh();
             if ($freshGoal->current_amount >= $freshGoal->target_amount) {
                 // Award the completion bonus at most once per goal. The conditional
@@ -122,6 +126,7 @@ class GoalController extends Controller
                     ->count();
                 $this->gamification->updateAchievementProgress($user, 'goal_completed_1', $completedCount);
                 $this->gamification->updateAchievementProgress($user, 'goal_completed_3', $completedCount);
+                $this->gamification->updateAchievementProgress($user, 'goal_completed_5', $completedCount);
             }
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Gamification Error (Deposit Goal): ' . $e->getMessage());
@@ -208,6 +213,7 @@ class GoalController extends Controller
             $user = $request->user();
             $this->gamification->awardXP($user, 50, "Membuat Target Tabungan: {$goal->name}");
             $this->gamification->recordActivity($user);
+            $this->gamification->recordQuestAction($user, 'create_goal', 1);
             $this->gamification->updateAchievementProgress($user, 'first_goal', 1);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Gamification Error (Store Goal): ' . $e->getMessage());

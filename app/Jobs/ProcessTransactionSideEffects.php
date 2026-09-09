@@ -214,12 +214,20 @@ class ProcessTransactionSideEffects implements ShouldQueue
         $gamification->awardXP($this->user, 10, 'Mencatat Transaksi');
         $gamification->recordActivity($this->user);
         $gamification->recordQuestAction($this->user, 'record_transactions', 1);
+
+        if ($this->transaction->type === 'income') {
+            $gamification->recordQuestAction($this->user, 'record_income', 1);
+        } elseif ($this->transaction->type === 'expense') {
+            $gamification->recordQuestAction($this->user, 'record_expense', 1);
+        }
+
         $gamification->updateAchievementProgress($this->user, 'first_tx', 1);
 
         $totalTxCount = Transaction::where('user_id', $this->user->id)->count();
         $gamification->updateAchievementProgress($this->user, 'tx_10', $totalTxCount);
         $gamification->updateAchievementProgress($this->user, 'tx_50', $totalTxCount);
         $gamification->updateAchievementProgress($this->user, 'tx_100', $totalTxCount);
+        $gamification->updateAchievementProgress($this->user, 'tx_250', $totalTxCount);
     }
 
     private function invalidateCaches(): void
