@@ -2,7 +2,13 @@
 
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\AiController;
+use App\Http\Controllers\Api\AccountSecurityController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\GoogleAuthController;
+use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\TwoFactorAuthController;
+use App\Http\Controllers\Api\UserSessionController;
 use App\Http\Controllers\BudgetController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\DashboardController;
@@ -23,12 +29,12 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('throttle:60,1')->group(function () {
     Route::post('/auth/login',           [AuthController::class, 'login']);
     Route::post('/auth/register',        [AuthController::class, 'register']);
-    Route::post('/auth/verify-email',    [AuthController::class, 'verifyEmail']);
-    Route::post('/auth/resend-otp',      [AuthController::class, 'resendOtp']);
-    Route::post('/auth/forgot-password', [AuthController::class, 'forgotPassword']);
-    Route::post('/auth/reset-password',  [AuthController::class, 'resetPassword']);
-    Route::post('/auth/verify-2fa',      [AuthController::class, 'verify2fa']);
-    Route::post('/auth/secure-account',  [AuthController::class, 'secureAccount']);
+    Route::post('/auth/verify-email',    [PasswordResetController::class, 'verifyEmail']);
+    Route::post('/auth/resend-otp',      [PasswordResetController::class, 'resendOtp']);
+    Route::post('/auth/forgot-password', [PasswordResetController::class, 'forgotPassword']);
+    Route::post('/auth/reset-password',  [PasswordResetController::class, 'resetPassword']);
+    Route::post('/auth/verify-2fa',      [TwoFactorAuthController::class, 'verify2fa']);
+    Route::post('/auth/secure-account',  [AccountSecurityController::class, 'secureAccount']);
 
     // ─── Backward-compatible aliases (agar kode frontend lama tidak break) ────
     Route::post('/login',    [AuthController::class, 'login']);
@@ -36,26 +42,26 @@ Route::middleware('throttle:60,1')->group(function () {
 });
 
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
-Route::get('/auth/google',          [AuthController::class, 'redirectToGoogle']);
-Route::get('/auth/google/callback', [AuthController::class, 'handleGoogleCallback']);
+Route::get('/auth/google',          [GoogleAuthController::class, 'redirectToGoogle']);
+Route::get('/auth/google/callback', [GoogleAuthController::class, 'handleGoogleCallback']);
 
 // ─── Protected Routes (requires Sanctum token) ───────────────────────────────
 Route::middleware('auth:sanctum')->group(function () {
 
-    // Auth
+    // Auth & Profile
     Route::get('/auth/me',        [AuthController::class, 'me']);
     Route::post('/auth/logout',   [AuthController::class, 'logout']);
-    Route::post('/auth/profile',  [AuthController::class, 'updateProfile']);
-    Route::post('/auth/password', [AuthController::class, 'updatePassword']);
-    Route::delete('/auth/profile', [AuthController::class, 'destroy']);
+    Route::post('/auth/profile',  [ProfileController::class, 'updateProfile']);
+    Route::post('/auth/password', [ProfileController::class, 'updatePassword']);
+    Route::delete('/auth/profile', [ProfileController::class, 'destroy']);
 
     // Two-Factor Authentication
-    Route::post('/auth/2fa/toggle', [AuthController::class, 'toggle2fa']);
+    Route::post('/auth/2fa/toggle', [TwoFactorAuthController::class, 'toggle2fa']);
 
     // Sessions
-    Route::get('/auth/sessions',                 [AuthController::class, 'getSessions']);
-    Route::delete('/auth/sessions',              [AuthController::class, 'revokeOtherSessions']);
-    Route::delete('/auth/sessions/{tokenId}',    [AuthController::class, 'revokeSession']);
+    Route::get('/auth/sessions',                 [UserSessionController::class, 'getSessions']);
+    Route::delete('/auth/sessions',              [UserSessionController::class, 'revokeOtherSessions']);
+    Route::delete('/auth/sessions/{tokenId}',    [UserSessionController::class, 'revokeSession']);
 
     // Backward-compatible aliases
     Route::post('/logout', [AuthController::class, 'logout']);
