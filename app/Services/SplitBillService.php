@@ -9,6 +9,8 @@ use App\Models\SplitBillItem;
 use App\Models\SplitBillItemParticipant;
 use App\Models\Transaction;
 use App\Models\User;
+use App\Services\SplitBill\SplitBillCalculator;
+use App\Services\SplitBill\SplitBillShareFormatter;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -17,10 +19,17 @@ use Illuminate\Validation\ValidationException;
 class SplitBillService
 {
     protected ?GamificationService $gamificationService;
+    protected SplitBillCalculator $calculator;
+    protected SplitBillShareFormatter $shareFormatter;
 
-    public function __construct(?GamificationService $gamificationService = null)
-    {
+    public function __construct(
+        ?GamificationService $gamificationService = null,
+        ?SplitBillCalculator $calculator = null,
+        ?SplitBillShareFormatter $shareFormatter = null
+    ) {
         $this->gamificationService = $gamificationService;
+        $this->calculator = $calculator ?? new SplitBillCalculator();
+        $this->shareFormatter = $shareFormatter ?? new SplitBillShareFormatter();
     }
 
     /**
@@ -153,166 +162,11 @@ class SplitBillService
     }
 
     /**
-     * Engine Perhitungan Pembagian Tagihan (Kalkulator Proporsional)
+     * Engine Perhitungan Pembagian Tagihan (Delegasi ke SplitBillCalculator)
      */
     public function calculateSplit(array $data): array
     {
-        $splitMode = $data['split_mode'] ?? 'equal';
-        $roundingMode = $data['rounding_mode'] ?? 'none';
-
-        $participants = $data['participants'] ?? [];
-        if (empty($participants)) {
-            throw new \InvalidArgumentException("Minimal harus ada 1 partisipan.");
-        }
-
-        $items = $data['items'] ?? [];
-        $subtotal = 0;
-
-        if ($splitMode === 'itemized' && !empty($items)) {
-            foreach ($items as &$item) {
-                $item['quantity'] = max(1, (int) ($item['quantity'] ?? 1));
-                $item['price'] = (float) ($item['price'] ?? 0);
-                $item['subtotal'] = $item['price'] * $item['quantity'];
-                $subtotal += $item['subtotal'];
-            }
-            unset($item);
-        } else {
-            $subtotal = (float) ($data['subtotal'] ?? 0);
-            if ($subtotal <= 0 && !empty($data['total_amount'])) {
-                $subtotal = (float) $data['total_amount'];
-            }
-        }
-
-        $taxPercent = (float) ($data['tax_percent'] ?? 0);
-        $taxAmount = isset($data['tax_amount']) && $data['tax_amount'] > 0 
-            ? (float) $data['tax_amount'] 
-            : round($subtotal * ($taxPercent / 100), 2);
-
-        $servicePercent = (float) ($data['service_percent'] ?? 0);
-        $serviceAmount = isset($data['service_amount']) && $data['service_amount'] > 0 
-            ? (float) $data['service_amount'] 
-            : round($subtotal * ($servicePercent / 100), 2);
-
-        $discountAmount = (float) ($data['discount_amount'] ?? 0);
-
-        $totalAmount = max(0, round($subtotal + $taxAmount + $serviceAmount - $discountAmount, 2));
-
-        $pCount = count($participants);
-
-        // Hitung bagian masing-masing partisipan
-        if ($splitMode === 'equal') {
-            $baseShare = $pCount > 0 ? ($totalAmount / $pCount) : $totalAmount;
-            foreach ($participants as &$p) {
-                $p['amount_owed'] = $this->applyRounding($baseShare, $roundingMode);
-            }
-            unset($p);
-
-            // Absorb the rounding residual so the shares account for the declared
-            // total exactly; otherwise the difference is silently lost.
-            $assigned = array_sum(array_map(
-                static fn ($p) => (float) ($p['amount_owed'] ?? 0),
-                $participants
-            ));
-            $residual = round($totalAmount - $assigned, 2);
-            if (abs($residual) >= 0.005 && $pCount > 0) {
-                $participants[0]['amount_owed'] = round(
-                    (float) $participants[0]['amount_owed'] + $residual, 2
-                );
-            }
-        } elseif ($splitMode === 'percentage') {
-            $pctSum = array_sum(array_map(
-                static fn ($p) => (float) ($p['percentage'] ?? (100 / max(1, $pCount))),
-                $participants
-            ));
-            if (abs($pctSum - 100) > 0.01) {
-                throw ValidationException::withMessages([
-                    'participants' => ['Persentase pembagian harus berjumlah 100%.'],
-                ]);
-            }
-            foreach ($participants as &$p) {
-                $pct = (float) ($p['percentage'] ?? (100 / max(1, $pCount)));
-                $share = $totalAmount * ($pct / 100);
-                $p['amount_owed'] = $this->applyRounding($share, $roundingMode);
-            }
-            unset($p);
-        } elseif ($splitMode === 'exact') {
-            foreach ($participants as &$p) {
-                $p['amount_owed'] = max(0, (float) ($p['amount_owed'] ?? 0));
-            }
-            unset($p);
-
-            $exactSum = array_sum(array_map(
-                static fn ($p) => (float) ($p['amount_owed'] ?? 0),
-                $participants
-            ));
-            if (abs($exactSum - $totalAmount) > 0.01) {
-                throw ValidationException::withMessages([
-                    'participants' => ['Nominal tiap partisipan harus berjumlah sama dengan total tagihan.'],
-                ]);
-            }
-        } elseif ($splitMode === 'itemized') {
-            // Hitung subtotal tiap partisipan berdasarkan item yang dipesan
-            $participantSubtotals = array_fill(0, $pCount, 0);
-
-            foreach ($items as $item) {
-                $pRefs = $item['participant_ids'] ?? [];
-                $countAssigned = count($pRefs);
-                if ($countAssigned === 0) continue;
-
-                $sharePerAssigned = $item['subtotal'] / $countAssigned;
-
-                foreach ($participants as $pIdx => $p) {
-                    $pRef = $p['temp_id'] ?? $p['name'];
-                    if (in_array($pRef, $pRefs) || in_array($pIdx, $pRefs)) {
-                        $participantSubtotals[$pIdx] += $sharePerAssigned;
-                    }
-                }
-            }
-
-            // Proporsional tax, service, discount
-            foreach ($participants as $pIdx => &$p) {
-                $pSubtotal = $participantSubtotals[$pIdx];
-                $ratio = $subtotal > 0 ? ($pSubtotal / $subtotal) : (1 / max(1, $pCount));
-
-                $pTax = $taxAmount * $ratio;
-                $pService = $serviceAmount * $ratio;
-                $pDiscount = $discountAmount * $ratio;
-
-                $pTotal = max(0, $pSubtotal + $pTax + $pService - $pDiscount);
-                $p['amount_owed'] = $this->applyRounding($pTotal, $roundingMode);
-            }
-            unset($p);
-        }
-
-        return [
-            'subtotal'        => $subtotal,
-            'tax_percent'     => $taxPercent,
-            'tax_amount'      => $taxAmount,
-            'service_percent' => $servicePercent,
-            'service_amount'  => $serviceAmount,
-            'discount_amount' => $discountAmount,
-            'total_amount'    => $totalAmount,
-            'participants'    => $participants,
-            'items'           => $items,
-        ];
-    }
-
-    /**
-     * Terapkan pembulatan ke nominal tertentu
-     */
-    private function applyRounding(float $amount, string $roundingMode): float
-    {
-        switch ($roundingMode) {
-            case 'up_100':
-                return ceil($amount / 100) * 100;
-            case 'up_1000':
-                return ceil($amount / 1000) * 1000;
-            case 'down_100':
-                return floor($amount / 100) * 100;
-            case 'none':
-            default:
-                return round($amount);
-        }
+        return $this->calculator->calculate($data);
     }
 
     /**
@@ -387,8 +241,6 @@ class SplitBillService
         }
 
         return DB::transaction(function () use ($splitBill, $creator, $account, $categoryId) {
-            // Serialise concurrent record-expense calls for the same bill so the
-            // my_transaction_id idempotency check below cannot be raced.
             $freshBill = SplitBill::whereKey($splitBill->getKey())->lockForUpdate()->first();
             if (!$freshBill) {
                 throw new \InvalidArgumentException("Tagihan tidak ditemukan.");
@@ -434,66 +286,10 @@ class SplitBillService
     }
 
     /**
-     * Generate Teks Tagihan WhatsApp Terformat Natural, Santun & Profesional
+     * Generate Teks Tagihan WhatsApp Terformat Natural, Santun & Profesional (Delegasi ke SplitBillShareFormatter)
      */
     public function generateWhatsAppMessage(SplitBill $splitBill, ?SplitBillParticipant $targetParticipant = null): string
     {
-        $title = $splitBill->title;
-        $date = Carbon::parse($splitBill->bill_date)->translatedFormat('d M Y');
-        $totalFormatted = "Rp " . number_format($splitBill->total_amount, 0, ',', '.');
-
-        $paymentText = "";
-        if (!empty($splitBill->payment_info)) {
-            $info = $splitBill->payment_info;
-            $bank = $info['bank_name'] ?? 'Transfer';
-            $accNo = $info['account_number'] ?? '-';
-            $holder = $info['account_holder'] ?? '';
-            $paymentText = "\nPembayaran bisa ditransfer ke:\n*{$bank}*: `{$accNo}`" . ($holder ? " (a.n. {$holder})" : "");
-        }
-
-        // Pesan Personal (1 Orang)
-        if ($targetParticipant) {
-            $amountFormatted = "Rp " . number_format($targetParticipant->amount_owed, 0, ',', '.');
-            
-            $text = "Halo {$targetParticipant->name},\n\n";
-            $text .= "Berikut rincian patungan untuk *{$title}* ({$date}) ya:\n";
-            $text .= "• Total bagianmu: *{$amountFormatted}*\n";
-
-            // Jika mode itemized, cantumkan menu yang dipesan
-            if ($splitBill->split_mode === 'itemized') {
-                $myItems = $targetParticipant->items;
-                if ($myItems->isNotEmpty()) {
-                    $text .= "\nMenu pesananmu:\n";
-                    foreach ($myItems as $item) {
-                        $fraction = $item->pivot->split_fraction ?? 1.0;
-                        $itemPrice = $item->subtotal * $fraction;
-                        $text .= "• {$item->name}: Rp " . number_format($itemPrice, 0, ',', '.') . "\n";
-                    }
-                }
-            }
-
-            $text .= $paymentText;
-            $text .= "\n\nKalau sudah transfer, tolong kabari ya. Terima kasih banyak!";
-            return $text;
-        }
-
-        // Pesan Rekap Grup (Seluruh Partisipan)
-        $text = "Halo teman-teman,\n\n";
-        $text .= "Berikut rincian patungan untuk *{$title}* ({$date}):\n";
-        $text .= "• Total Tagihan: *{$totalFormatted}*\n\n";
-        $text .= "Rincian Pembagian:\n";
-
-        $idx = 1;
-        foreach ($splitBill->participants as $p) {
-            $statusLabel = $p->is_creator ? '(sudah ditalangi)' : ($p->status === 'paid' ? '[Lunas]' : '[Belum Transfer]');
-            $amount = "Rp " . number_format($p->amount_owed, 0, ',', '.');
-            $text .= "{$idx}. *{$p->name}*: {$amount} {$statusLabel}\n";
-            $idx++;
-        }
-
-        $text .= $paymentText;
-        $text .= "\n\nJika sudah transfer, mohon konfirmasi ya. Terima kasih semuanya!";
-
-        return $text;
+        return $this->shareFormatter->formatWhatsAppMessage($splitBill, $targetParticipant);
     }
 }
