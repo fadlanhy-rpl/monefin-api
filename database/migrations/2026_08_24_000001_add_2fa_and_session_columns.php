@@ -10,7 +10,7 @@ return new class extends Migration
     {
         // Add 2FA flag to users
         Schema::table('users', function (Blueprint $table) {
-            $table->boolean('two_factor_enabled')->default(false)->after('preferences');
+            $table->boolean('two_factor_enabled')->default(false);
         });
 
         // Enrich personal_access_tokens with device info
