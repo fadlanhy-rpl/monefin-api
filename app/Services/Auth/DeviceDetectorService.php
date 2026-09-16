@@ -38,9 +38,17 @@ class DeviceDetectorService
             $browser = 'Vivaldi';
         } elseif (str_contains($ua, 'SamsungBrowser')) {
             $browser = 'Samsung Internet';
-        } elseif (str_contains($ua, 'Chrome')) {
+        } elseif (str_contains($ua, 'MiuiBrowser') || str_contains($ua, 'XiaoMi/MiuiBrowser')) {
+            $browser = 'Mi Browser';
+        } elseif (str_contains($ua, 'VivoBrowser')) {
+            $browser = 'Vivo Browser';
+        } elseif (str_contains($ua, 'HeyTapBrowser')) {
+            $browser = 'Oppo Browser';
+        } elseif (str_contains($ua, 'UCBrowser') || str_contains($ua, 'UBrowser')) {
+            $browser = 'UC Browser';
+        } elseif (str_contains($ua, 'Chrome') || str_contains($ua, 'CriOS')) {
             $browser = 'Chrome';
-        } elseif (str_contains($ua, 'Firefox')) {
+        } elseif (str_contains($ua, 'Firefox') || str_contains($ua, 'FxiOS')) {
             $browser = 'Firefox';
         } elseif (str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome')) {
             $browser = 'Safari';
@@ -48,11 +56,14 @@ class DeviceDetectorService
             $browser = 'Browser';
         }
 
+        // Urutan deteksi OS:
+        // PENTING: Android HARUS dicek sebelum Linux, karena UA Android selalu mengandung "Linux; Android"
         if (str_contains($ua, 'Windows'))        $os = 'Windows';
-        elseif (str_contains($ua, 'Macintosh'))  $os = 'Mac';
-        elseif (str_contains($ua, 'Linux'))      $os = 'Linux';
         elseif (str_contains($ua, 'Android'))    $os = 'Android';
         elseif (str_contains($ua, 'iPhone'))     $os = 'iPhone';
+        elseif (str_contains($ua, 'iPad'))       $os = 'iPad';
+        elseif (str_contains($ua, 'Macintosh') || str_contains($ua, 'Mac OS X')) $os = 'Mac';
+        elseif (str_contains($ua, 'Linux'))      $os = 'Linux';
         else                                     $os = 'Unknown OS';
 
         return "{$browser} on {$os} ({$device})";
