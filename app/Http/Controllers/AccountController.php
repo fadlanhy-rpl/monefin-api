@@ -21,7 +21,6 @@ class AccountController extends Controller
     {
         $accounts = $request->user()
             ->accounts()
-            ->withTrashed()
             ->orderBy('sort_order', 'asc')
             ->latest()
             ->get();
