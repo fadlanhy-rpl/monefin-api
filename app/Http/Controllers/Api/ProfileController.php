@@ -23,7 +23,7 @@ class ProfileController extends Controller
 
         $validator = Validator::make($request->all(), [
             'name'        => ['required', 'string', 'max:255'],
-            'photo'       => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
+            'photo'       => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:10240',
             'phone'       => 'nullable|string|max:50',
             'occupation'  => 'nullable|string|max:100',
             'bio'         => 'nullable|string',
@@ -31,7 +31,7 @@ class ProfileController extends Controller
         ], [
             'photo.image' => 'File harus berupa gambar.',
             'photo.mimes' => 'Format gambar harus jpeg, png, jpg, gif, atau webp.',
-            'photo.max'   => 'Ukuran gambar maksimal adalah 2MB.',
+            'photo.max'   => 'Ukuran gambar maksimal adalah 10MB.',
         ]);
 
         if ($validator->fails()) {
