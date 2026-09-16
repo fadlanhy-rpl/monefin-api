@@ -1,0 +1,10 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Block access to hidden files/folders (such as .env, .git)
+    RewriteRule ^\.(.*)$ - [F,L]
+
+    # Route requests to public/ folder
+    RewriteRule ^$ public/ [L]
+    RewriteRule (.*) public/$1 [L]
+</IfModule>
