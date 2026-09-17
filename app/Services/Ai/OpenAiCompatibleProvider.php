@@ -188,7 +188,12 @@ class OpenAiCompatibleProvider implements AiProvider
             $buffer = '';
 
             while (!$body->eof()) {
-                $buffer .= $body->read(256);
+                $chunk = $body->read(64);
+                if ($chunk === '') {
+                    usleep(5000);
+                    continue;
+                }
+                $buffer .= $chunk;
                 while (($pos = strpos($buffer, "\n")) !== false) {
                     $line = trim(substr($buffer, 0, $pos));
                     $buffer = substr($buffer, $pos + 1);

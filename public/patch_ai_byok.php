@@ -294,7 +294,12 @@ class OpenAiCompatibleProvider implements AiProvider
             $buffer = '';
 
             while (!$body->eof()) {
-                $buffer .= $body->read(256);
+                $chunk = $body->read(64);
+                if ($chunk === '') {
+                    usleep(5000);
+                    continue;
+                }
+                $buffer .= $chunk;
                 while (($pos = strpos($buffer, "\n")) !== false) {
                     $line = trim(substr($buffer, 0, $pos));
                     $buffer = substr($buffer, $pos + 1);
@@ -927,6 +932,14 @@ class AiController extends Controller
         ]);
 
         return response()->stream(function () use ($user, $validated) {
+            if (function_exists('apache_setenv')) {
+                @apache_setenv('no-gzip', '1');
+            }
+            @ini_set('zlib.output_compression', 'Off');
+            @ini_set('output_buffering', 'Off');
+            @ini_set('implicit_flush', '1');
+            @ob_implicit_flush(true);
+
             try {
                 // Safely clean non-zlib buffers
                 while (ob_get_level() > 0) {
