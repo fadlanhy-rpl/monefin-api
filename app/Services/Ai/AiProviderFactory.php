@@ -33,22 +33,31 @@ class AiProviderFactory
             'label'  => 'Anthropic Claude',
             'models' => ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5'],
         ],
+        'grok' => [
+            'label'  => 'xAI (Grok)',
+            'models' => ['grok-2-latest', 'grok-2-vision-1212', 'grok-beta'],
+        ],
         'groq' => [
-            'label'  => 'Groq',
+            'label'  => 'Groq (LPU Cloud)',
             'models' => ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+        ],
+        'custom' => [
+            'label'     => 'Custom (OpenAI-Compatible)',
+            'models'    => ['qwen-2.5-72b-instruct', 'qwen-2.5-32b-instruct', 'deepseek-r1', 'llama-3.3-70b-instruct'],
+            'is_custom' => true,
         ],
     ];
 
     /**
      * Create a provider instance from user configuration.
      */
-    public static function make(string $provider, string $apiKey, string $model): AiProvider
+    public static function make(string $provider, string $apiKey, string $model, ?string $baseUrl = null): AiProvider
     {
         if ($provider === 'claude') {
             return new ClaudeProvider($apiKey, $model);
         }
 
-        return new OpenAiCompatibleProvider($provider, $apiKey, $model);
+        return new OpenAiCompatibleProvider($provider, $apiKey, $model, $baseUrl);
     }
 
     /**

@@ -53,7 +53,7 @@ class UserApiKeyService
 
         $aiConfig = $prefs['ai_config'] ?? [];
         $targetProvider = $provider ?: ($aiConfig['provider'] ?? 'openai');
-        $encryptedKey = $aiConfig['api_key'] ?? null;
+        $encryptedKey = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? null);
 
         if (!$encryptedKey) {
             return null;

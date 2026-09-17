@@ -16,6 +16,7 @@ class OpenAiCompatibleProvider implements AiProvider
         'gemini'   => 'https://generativelanguage.googleapis.com/v1beta/openai',
         'deepseek' => 'https://api.deepseek.com/v1',
         'kimi'     => 'https://api.moonshot.ai/v1',
+        'grok'     => 'https://api.x.ai/v1',
         'groq'     => 'https://api.groq.com/openai/v1',
     ];
 
@@ -39,8 +40,17 @@ class OpenAiCompatibleProvider implements AiProvider
         private readonly string $provider,
         private readonly string $apiKey,
         private readonly string $model,
+        ?string $customBaseUrl = null,
     ) {
-        $this->baseUrl = self::BASE_URLS[$provider] ?? 'https://api.openai.com/v1';
+        if ($provider === 'custom' && !empty($customBaseUrl)) {
+            $url = rtrim(trim($customBaseUrl), '/');
+            if (str_ends_with($url, '/chat/completions')) {
+                $url = substr($url, 0, -strlen('/chat/completions'));
+            }
+            $this->baseUrl = $url;
+        } else {
+            $this->baseUrl = self::BASE_URLS[$provider] ?? 'https://api.openai.com/v1';
+        }
     }
 
     public function chat(array $messages, float $temperature = 0.7): string
@@ -187,7 +197,9 @@ class OpenAiCompatibleProvider implements AiProvider
             'gemini'   => 'aistudio.google.com',
             'deepseek' => 'platform.deepseek.com',
             'kimi'     => 'platform.moonshot.cn',
+            'grok'     => 'console.x.ai',
             'groq'     => 'console.groq.com',
+            'custom'   => 'dashboard penyedia API kustom Anda',
         ];
 
         $dashboard = $labels[$this->provider] ?? 'dashboard provider Anda';
@@ -202,7 +214,9 @@ class OpenAiCompatibleProvider implements AiProvider
             'gemini'   => 'Google Gemini',
             'deepseek' => 'DeepSeek',
             'kimi'     => 'Kimi (Moonshot)',
+            'grok'     => 'xAI (Grok)',
             'groq'     => 'Groq',
+            'custom'   => 'Custom Provider',
             default    => ucfirst($this->provider),
         };
     }

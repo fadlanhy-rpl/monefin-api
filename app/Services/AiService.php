@@ -248,7 +248,9 @@ class AiService
             $model = AiProviderFactory::defaultModel($provider);
         }
 
-        return AiProviderFactory::make($provider, $apiKey, $model);
+        $baseUrl = $aiConfig['base_url'] ?? null;
+
+        return AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);
     }
 
     /**

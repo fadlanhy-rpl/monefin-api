@@ -259,6 +259,7 @@ class AiController extends Controller
             'provider'   => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
             'model'      => ['nullable', 'string', 'max:100'],
             'api_key'    => ['nullable', 'string', 'max:500'],
+            'base_url'   => ['nullable', 'string', 'max:500'],
         ]);
 
         $user  = $request->user();
@@ -272,6 +273,7 @@ class AiController extends Controller
             $prefs['ai_config'] = [
                 'provider' => $validated['provider'],
                 'model'    => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
+                'base_url' => !empty($validated['base_url']) ? trim($validated['base_url']) : ($existing['base_url'] ?? null),
                 // Preserve existing encrypted key if no new key provided
                 'api_key_encrypted' => !empty($validated['api_key'])
                     ? Crypt::encryptString($validated['api_key'])
@@ -291,6 +293,7 @@ class AiController extends Controller
             'ai_config'  => [
                 'provider'       => $prefs['ai_config']['provider']      ?? null,
                 'model'          => $prefs['ai_config']['model']         ?? null,
+                'base_url'       => $prefs['ai_config']['base_url']      ?? null,
                 'api_key_masked' => $prefs['ai_config']['api_key_masked'] ?? null,
             ],
         ]);
