@@ -373,6 +373,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 
+
 class AiService
 {
     public function __construct(
@@ -444,6 +445,26 @@ class AiService
     }
 
     /**
+     * Test the user's configured AI connection with a minimal message.
+     * Returns array: ['ok' => bool, 'provider' => string, 'model' => string, 'message' => string]
+     */
+    public function testConnection(User $user): array
+    {
+        $prefs    = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $provider = $aiConfig['provider'] ?? '';
+        $model    = $aiConfig['model'] ?? '';
+        $baseUrl  = $aiConfig['base_url'] ?? null;
+        $apiKey   = $this->getDecryptedApiKey($user);
+
+        if (!$provider || !$apiKey) {
+            return ['ok' => false, 'message' => 'Konfigurasi AI belum lengkap. Masukkan provider dan API key.'];
+        }
+
+        return $this->testConnectionDirect($provider, $apiKey, $model, $baseUrl);
+    }
+
+    /**
      * Test connection directly using supplied credentials (used for on-the-fly testing before saving).
      */
     public function testConnectionDirect(string $provider, string $apiKey, ?string $model = null, ?string $baseUrl = null): array
@@ -509,27 +530,8 @@ class AiService
     }
 
     /**
-     * Test the user's configured AI connection with a minimal message.
-     * Returns array: ['ok' => bool, 'provider' => string, 'model' => string, 'message' => string]
-     */
-    public function testConnection(User $user): array
-    {
-        $prefs    = $user->preferences ?? [];
-        $aiConfig = $prefs['ai_config'] ?? [];
-        $provider = $aiConfig['provider'] ?? '';
-        $model    = $aiConfig['model'] ?? '';
-        $baseUrl  = $aiConfig['base_url'] ?? null;
-        $apiKey   = $this->getDecryptedApiKey($user);
-
-        if (!$provider || !$apiKey) {
-            return ['ok' => false, 'message' => 'Konfigurasi AI belum lengkap. Masukkan provider dan API key.'];
-        }
-
-        return $this->testConnectionDirect($provider, $apiKey, $model, $baseUrl);
-    }
-
-    /**
      * Suggest the best category for a transaction based on its description.
+     * Works purely with string matching — does NOT require AI.
      */
     public function suggestCategory(array $categories, string $description, string $type = 'expense'): ?array
     {
@@ -539,84 +541,67 @@ class AiService
 
         $categoryList = collect($categories)
             ->filter(fn($c) => ($c['type'] ?? $type) === $type || !isset($c['type']))
-            ->map(fn($c) => "ID: {$c['id']}, Nama: {$c['name']}")
-            ->join("\n");
+            ->map(fn($c) => "ID:{$c['id']} => {$c['name']}")
+            ->implode(', ');
 
-        if (empty($categoryList)) {
-            return null;
+        $prompt = "Kamu adalah sistem kategorisasi transaksi keuangan. Dari deskripsi transaksi berikut, pilih ID kategori yang paling sesuai dari daftar yang tersedia. Jawab HANYA dengan ID angka, tidak ada teks lain.\n\nTipe transaksi: {$type}\nDeskripsi: \"{$description}\"\nDaftar kategori (ID => Nama): {$categoryList}\n\nJawab hanya dengan angka ID kategori yang paling sesuai:";
+
+        $messages  = [['role' => 'user', 'content' => $prompt]];
+        $provider  = $this->makeProvider(null);
+
+        if (is_string($provider)) {
+            // AI not available — simple keyword fallback
+            return $this->suggestCategoryFallback($categories, $description, $type);
         }
 
-        $prompt = <<<PROMPT
-Kamu adalah asisten keuangan MoneFin. Tentukan SATU kategori yang paling cocok untuk transaksi berikut.
+        $response   = $provider->chat($messages, 0.1);
+        $categoryId = (int) trim(preg_replace('/\D/', '', $response));
 
-Deskripsi transaksi: "{$description}"
-Tipe: {$type}
-
-Daftar kategori yang tersedia:
-{$categoryList}
-
-Balas HANYA dengan JSON valid format: {"id": <category_id>, "confidence": <0.0-1.0>}
-Jangan tambahkan teks lain di luar JSON.
-PROMPT;
-
-        $cacheKey = 'ai_cat_' . md5($description . '_' . $type . '_' . count($categories));
-        return Cache::remember($cacheKey, 86400, function () use ($prompt, $categories) {
-            $user = auth()->user();
-            $provider = $this->makeProvider($user);
-            if (is_string($provider)) {
-                return null;
+        if ($categoryId > 0) {
+            $match = collect($categories)->firstWhere('id', $categoryId);
+            if ($match) {
+                return ['id' => $match['id'], 'name' => $match['name']];
             }
+        }
 
-            try {
-                $raw = $provider->chat([['role' => 'user', 'content' => $prompt]], 0.1);
-                $clean = preg_replace('/^```(?:json)?\s*|\s*```$/m', '', trim($raw));
-                $data = json_decode($clean, true);
-
-                if (!empty($data['id'])) {
-                    $matched = collect($categories)->firstWhere('id', (int) $data['id']);
-                    if ($matched) {
-                        return [
-                            'id'         => $matched['id'],
-                            'name'       => $matched['name'],
-                            'confidence' => $data['confidence'] ?? 0.8,
-                        ];
-                    }
-                }
-            } catch (\Throwable $e) {
-                Log::warning('AI category suggestion failed', ['error' => $e->getMessage()]);
-            }
-
-            return null;
-        });
+        return $this->suggestCategoryFallback($categories, $description, $type);
     }
 
     /**
-     * Budget recommendations based on 3-month spending history.
+     * Recommend monthly budget limits per category based on 3 months of history.
+     * Works with or without AI — AI enhances the reason text.
      */
     public function budgetRecommendations(User $user): array
     {
-        $threeMonthsAgo = Carbon::now()->subMonths(3)->startOfMonth();
+        $threeMonthsAgo = Carbon::now()->subMonths(3)->startOfMonth()->toDateString();
+        $today          = Carbon::now()->toDateString();
 
         $spending = Transaction::where('user_id', $user->id)
             ->where('type', 'expense')
-            ->where('date', '>=', $threeMonthsAgo)
-            ->whereNotNull('category_id')
-            ->selectRaw('category_id, SUM(amount) as total_spent, COUNT(*) as count')
-            ->groupBy('category_id')
+            ->whereBetween('transaction_date', [$threeMonthsAgo, $today])
             ->with('category:id,name')
             ->get()
-            ->map(fn($t) => [
-                'category_id'   => $t->category_id,
-                'category_name' => $t->category?->name ?? 'Lainnya',
-                'avg_monthly'   => round($t->total_spent / 3),
-                'total_spent'   => (float) $t->total_spent,
-                'count'         => $t->count,
-            ])
+            ->groupBy('category_id')
+            ->map(function ($group) {
+                $monthly = $group->sum('amount') / 3;
+                return [
+                    'category_id'   => $group->first()->category_id,
+                    'category_name' => $group->first()->category?->name ?? 'Lain-lain',
+                    'avg_monthly'   => round($monthly),
+                    'total_3months' => $group->sum('amount'),
+                ];
+            })
+            ->values()
             ->toArray();
 
+        if (empty($spending)) {
+            return ['message' => 'Belum cukup data transaksi (minimal 1 bulan) untuk membuat rekomendasi.', 'recommendations' => []];
+        }
+
+        // Build deterministic recommendations (always available)
         $recommendations = collect($spending)->map(function ($s) {
-            $limit  = round($s['avg_monthly'] * 0.85 / 10000) * 10000;
-            $limit  = max($limit, 50000);
+            $limit  = round($s['avg_monthly'] * 0.85 / 10000) * 10000; // 85% of avg, rounded to 10k
+            $limit  = max($limit, 50000); // Minimum 50k
             return [
                 'category_id'       => $s['category_id'],
                 'category_name'     => $s['category_name'],
@@ -630,9 +615,14 @@ PROMPT;
 
     // ─── Private Helpers ──────────────────────────────────────────────────────
 
+    /**
+     * Build and return an AiProvider for the given user (or null for no-user scenario).
+     * Returns error string if AI is not configured or disabled.
+     */
     private function makeProvider(?User $user): \App\Services\Ai\AiProvider|string
     {
         if (!$user) {
+            // Server-side use with no user context (e.g. suggest-category fallback)
             return 'AI_NOT_CONFIGURED';
         }
 
@@ -656,10 +646,15 @@ PROMPT;
             return "Provider AI '{$provider}' tidak didukung. Pilih provider yang tersedia di Settings.";
         }
 
-        $apiKey = $this->getDecryptedApiKey($user);
+        $apiKey = $this->keyService->getDecryptedKey($user, $provider);
 
         if (!$apiKey) {
-            return 'Gagal mendekripsi API key. Silakan simpan ulang API key di Settings → AI Chatbot.';
+            try {
+                $apiKey = Crypt::decryptString($encKey);
+            } catch (\Throwable $e) {
+                Log::error('Failed to decrypt AI API key', ['user_id' => $user->id]);
+                return 'Gagal mendekripsi API key. Silakan simpan ulang API key di Settings → AI Chatbot.';
+            }
         }
 
         if (empty($model)) {
@@ -671,83 +666,164 @@ PROMPT;
         return AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);
     }
 
+    /**
+     * Format the QUOTA_EXCEEDED pipe-delimited signal into a user-friendly message.
+     */
     public function formatQuotaError(string $raw): string
     {
-        $parts     = explode('|', $raw);
-        $provider  = $parts[1] ?? 'provider AI Anda';
-        $dashboard = $parts[2] ?? 'dashboard provider';
+        // Format: "QUOTA_EXCEEDED|Provider Name|dashboard.url"
+        $parts    = explode('|', $raw);
+        $prov     = $parts[1] ?? 'Provider';
+        $dashboard = $parts[2] ?? 'dashboard provider Anda';
 
-        return "Kuota atau saldo API key {$provider} Anda telah habis. Silakan isi ulang saldo di {$dashboard} atau ganti API key di Settings → AI Chatbot.";
+        return "Kuota / saldo API {$prov} Anda habis. Silakan recharge di {$dashboard} atau ganti API key di Settings → AI Chatbot.";
     }
 
-    public function isQuotaError(string $text): bool
+    /**
+     * Check if a response string is a quota error signal.
+     */
+    public function isQuotaError(string $response): bool
     {
-        return str_starts_with($text, 'QUOTA_EXCEEDED|');
+        return str_starts_with($response, 'QUOTA_EXCEEDED|');
+    }
+
+    private function suggestCategoryFallback(array $categories, string $description, string $type): ?array
+    {
+        $desc  = strtolower($description);
+        $scored = collect($categories)
+            ->filter(fn($c) => ($c['type'] ?? $type) === $type)
+            ->map(function ($c) use ($desc) {
+                $name   = strtolower($c['name']);
+                $score  = similar_text($desc, $name);
+                // Bonus for keyword match
+                if (str_contains($desc, $name) || str_contains($name, $desc)) {
+                    $score += 20;
+                }
+                return array_merge($c, ['_score' => $score]);
+            })
+            ->sortByDesc('_score')
+            ->first();
+
+        return $scored ? ['id' => $scored['id'], 'name' => $scored['name']] : null;
     }
 
     private function buildUserContext(User $user): array
     {
-        $startOfMonth = Carbon::now()->startOfMonth();
+        // Cache 2 menit — data keuangan user jarang berubah dalam hitungan detik.
+        // Di-invalidate otomatis oleh ProcessTransactionSideEffects job saat ada transaksi baru.
+        return Cache::remember("ai_context:{$user->id}", 120, fn () => $this->buildUserContextRaw($user));
+    }
 
-        $income = (float) Transaction::where('user_id', $user->id)
-            ->where('type', 'income')
-            ->where('date', '>=', $startOfMonth)
-            ->sum('amount');
+    private function buildUserContextRaw(User $user): array
+    {
+        $now        = Carbon::now();
+        $startMonth = $now->copy()->startOfMonth()->toDateString();
+        $endMonth   = $now->copy()->endOfMonth()->toDateString();
+        $startWeek  = $now->copy()->startOfWeek()->toDateString();
+        $endWeek    = $now->copy()->endOfWeek()->toDateString();
+        $last30     = $now->copy()->subDays(30)->toDateString();
 
-        $expense = (float) Transaction::where('user_id', $user->id)
+        $totalBalance     = $user->accounts()->sum('balance');
+        $incomeThisMonth  = Transaction::where('user_id', $user->id)->where('type', 'income')->whereBetween('transaction_date', [$startMonth, $endMonth])->sum('amount');
+        $expenseThisMonth = Transaction::where('user_id', $user->id)->where('type', 'expense')->whereBetween('transaction_date', [$startMonth, $endMonth])->sum('amount');
+        $expenseThisWeek  = Transaction::where('user_id', $user->id)->where('type', 'expense')->whereBetween('transaction_date', [$startWeek, $endWeek])->sum('amount');
+
+        $lastWeek        = $now->copy()->subWeek();
+        $expenseLastWeek = Transaction::where('user_id', $user->id)->where('type', 'expense')
+            ->whereBetween('transaction_date', [
+                $lastWeek->copy()->startOfWeek()->toDateString(),
+                $lastWeek->copy()->endOfWeek()->toDateString(),
+            ])->sum('amount');
+
+        $topCategories = Transaction::where('user_id', $user->id)
             ->where('type', 'expense')
-            ->where('date', '>=', $startOfMonth)
-            ->sum('amount');
+            ->whereBetween('transaction_date', [$last30, $now->toDateString()])
+            ->with('category:id,name')
+            ->selectRaw('category_id, SUM(amount) as total')
+            ->groupBy('category_id')
+            ->orderByDesc('total')
+            ->limit(5)
+            ->get()
+            ->map(fn($r) => ['category' => $r->category?->name ?? 'Lain-lain', 'amount' => (float) $r->total])
+            ->toArray();
 
         $budgets = Budget::where('user_id', $user->id)
-            ->where('month', Carbon::now()->format('Y-m'))
+            ->where('month', $now->month)
+            ->where('year', $now->year)
             ->with('category:id,name')
             ->get()
-            ->map(fn($b) => [
-                'category' => $b->category?->name ?? 'Lainnya',
-                'limit'    => (float) $b->amount,
-                'spent'    => (float) Transaction::where('user_id', $user->id)
+            ->map(function ($b) use ($user, $now) {
+                $spent = Transaction::where('user_id', $user->id)
                     ->where('category_id', $b->category_id)
                     ->where('type', 'expense')
-                    ->where('date', '>=', $startOfMonth)
-                    ->sum('amount'),
+                    ->whereMonth('transaction_date', $now->month)
+                    ->whereYear('transaction_date', $now->year)
+                    ->sum('amount');
+                return [
+                    'category' => $b->category?->name,
+                    'limit'    => (float) $b->limit_amount,
+                    'spent'    => (float) $spent,
+                    'percent'  => $b->limit_amount > 0 ? round(($spent / $b->limit_amount) * 100) : 0,
+                ];
+            })
+            ->toArray();
+
+        $goals = $user->goals()
+            ->limit(3)
+            ->get(['name', 'target_amount', 'current_amount'])
+            ->map(fn($g) => [
+                'name'    => $g->name,
+                'target'  => (float) $g->target_amount,
+                'current' => (float) $g->current_amount,
+                'percent' => $g->target_amount > 0 ? round(($g->current_amount / $g->target_amount) * 100) : 0,
             ])
             ->toArray();
 
-        return [
-            'name'                 => $user->name,
-            'current_month'        => Carbon::now()->locale('id')->isoFormat('MMMM Y'),
-            'total_income_month'   => $income,
-            'total_expense_month'  => $expense,
-            'net_savings_month'    => $income - $expense,
-            'budgets'              => $budgets,
-        ];
+        return compact('totalBalance', 'incomeThisMonth', 'expenseThisMonth', 'expenseThisWeek', 'expenseLastWeek', 'topCategories', 'budgets', 'goals', 'now');
     }
 
-    private function buildSystemPrompt(array $context): string
+    private function buildSystemPrompt(array $ctx): string
     {
-        $budgetsText = empty($context['budgets'])
-            ? 'Belum ada budget yang diatur bulan ini.'
-            : collect($context['budgets'])
-                ->map(fn($b) => "- {$b['category']}: Terpakai Rp " . number_format($b['spent'], 0, ',', '.') . " dari limit Rp " . number_format($b['limit'], 0, ',', '.'))
-                ->join("\n");
+        $text = $this->contextToText($ctx);
+        return "Kamu adalah MoneFin AI — asisten keuangan personal yang cerdas, ramah, dan membantu. Kamu berbicara dalam bahasa yang sama dengan pertanyaan pengguna (Bahasa Indonesia atau Inggris). Kamu memiliki akses ke data keuangan nyata pengguna berikut:\n\n{$text}\n\nPedoman:\n- Berikan analisis dan saran yang jelas, lengkap, spesifik, dan actionable berbasis data nyata di atas\n- Gunakan format yang mudah dibaca dengan bullet points dan langkah-langkah konkret\n- Jangan pernah meminta data finansial tambahan karena seluruh data sudah tersedia di atas\n- Selalu berikan motivasi dan kata-kata positif untuk membantu pengguna mencapai kesehatan finansial";
+    }
 
-        return <<<PROMPT
-Kamu adalah MoneFin AI, penasihat keuangan pribadi cerdas dari aplikasi MoneFin.
-Nama pengguna: {$context['name']}
-Bulan ini: {$context['current_month']}
-Total Pemasukan Bulan Ini: Rp {$context['total_income_month']}
-Total Pengeluaran Bulan Ini: Rp {$context['total_expense_month']}
-Tabungan Bersih Bulan Ini: Rp {$context['net_savings_month']}
+    private function contextToText(array $ctx): string
+    {
+        $lines = [];
+        $fmt   = fn($n) => 'Rp ' . number_format((float) $n, 0, ',', '.');
 
-Status Budget Bulan Ini:
-{$budgetsText}
+        $lines[] = "Tanggal sekarang: {$ctx['now']->format('d F Y')}";
+        $lines[] = "Total saldo semua akun: " . $fmt($ctx['totalBalance']);
+        $lines[] = "Pemasukan bulan ini: " . $fmt($ctx['incomeThisMonth']);
+        $lines[] = "Pengeluaran bulan ini: " . $fmt($ctx['expenseThisMonth']);
+        $lines[] = "Selisih (tabungan) bulan ini: " . $fmt($ctx['incomeThisMonth'] - $ctx['expenseThisMonth']);
+        $lines[] = "Pengeluaran minggu ini: " . $fmt($ctx['expenseThisWeek']);
+        $lines[] = "Pengeluaran minggu lalu: " . $fmt($ctx['expenseLastWeek']);
 
-Tugasmu:
-1. Berikan jawaban yang ramah, sopan, dan solutif seputar perencanaan keuangan, penghematan, dan analisis budget pengguna.
-2. Gunakan angka riil keuangan pengguna di atas jika relevan untuk menjawab pertanyaannya.
-3. Jawab dalam Bahasa Indonesia yang santun dan profesional.
-PROMPT;
+        if (!empty($ctx['topCategories'])) {
+            $lines[] = "\nTop 5 kategori pengeluaran (30 hari):";
+            foreach ($ctx['topCategories'] as $i => $c) {
+                $lines[] = "  " . ($i + 1) . ". {$c['category']}: " . $fmt($c['amount']);
+            }
+        }
+
+        if (!empty($ctx['budgets'])) {
+            $lines[] = "\nBudget bulan ini:";
+            foreach ($ctx['budgets'] as $b) {
+                $status  = $b['percent'] >= 90 ? 'Hampir habis' : ($b['percent'] >= 75 ? 'Perlu hati-hati' : 'Aman');
+                $lines[] = "  - {$b['category']}: {$fmt($b['spent'])} / {$fmt($b['limit'])} ({$b['percent']}%) [{$status}]";
+            }
+        }
+
+        if (!empty($ctx['goals'])) {
+            $lines[] = "\nTarget tabungan (Goals):";
+            foreach ($ctx['goals'] as $g) {
+                $lines[] = "  - {$g['name']}: {$fmt($g['current'])} / {$fmt($g['target'])} ({$g['percent']}%)";
+            }
+        }
+
+        return implode("\n", $lines);
     }
 }
 EOF_SERVICE;
