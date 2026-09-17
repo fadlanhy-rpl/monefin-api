@@ -174,11 +174,13 @@ class OpenAiCompatibleProvider implements AiProvider
                 $payload['max_tokens'] = 4096;
             }
 
-            $response = Http::timeout(45)
+            $response = Http::timeout(25)
                 ->withOptions(['verify' => $verifySSL])
                 ->withHeaders([
                     'Authorization' => "Bearer {$this->apiKey}",
                     'Content-Type'  => 'application/json',
+                    'HTTP-Referer'  => config('app.url', 'https://monefin.web.id'),
+                    'X-Title'       => 'MoneFin',
                 ])
                 ->post("{$this->baseUrl}/chat/completions", $payload);
 
@@ -257,8 +259,9 @@ class OpenAiCompatibleProvider implements AiProvider
 
         try {
             $client = new \GuzzleHttp\Client([
-                'timeout' => 90.0,
-                'verify'  => $verifySSL,
+                'timeout'     => 45.0,
+                'verify'      => $verifySSL,
+                'http_errors' => false,
             ]);
 
             $response = $client->post("{$this->baseUrl}/chat/completions", [
@@ -266,47 +269,52 @@ class OpenAiCompatibleProvider implements AiProvider
                     'Authorization' => "Bearer {$this->apiKey}",
                     'Content-Type'  => 'application/json',
                     'Accept'        => 'text/event-stream',
+                    'HTTP-Referer'  => config('app.url', 'https://monefin.web.id'),
+                    'X-Title'       => 'MoneFin',
                 ],
                 'json' => [
                     'model'       => $this->model,
                     'messages'    => $messages,
                     'temperature' => $temperature,
-                    'max_tokens'  => 4096,
                     'stream'      => true,
                 ],
                 'stream' => true,
             ]);
 
+            $statusCode = $response->getStatusCode();
+            if ($statusCode >= 400) {
+                $rawBody = (string) $response->getBody();
+                $errJson = json_decode($rawBody, true);
+                $errMsg  = $errJson['error']['message'] ?? "Error {$statusCode} dari AI provider.";
+                $onChunk("Error dari {$this->providerLabel()} ({$statusCode}): {$errMsg}");
+                return;
+            }
+
             $body = $response->getBody();
             $buffer = '';
 
             while (!$body->eof()) {
-                $chunk = $body->read(128);
-                $buffer .= $chunk;
-
+                $buffer .= $body->read(256);
                 while (($pos = strpos($buffer, "\n")) !== false) {
-                    $line   = substr($buffer, 0, $pos);
+                    $line = trim(substr($buffer, 0, $pos));
                     $buffer = substr($buffer, $pos + 1);
-                    $line   = trim($line);
 
                     if (str_starts_with($line, 'data: ')) {
-                        $jsonStr = substr($line, 6);
-                        if ($jsonStr === '[DONE]') {
-                            break 2;
+                        $data = substr($line, 6);
+                        if ($data === '[DONE]') {
+                            return;
                         }
-
-                        $decoded = json_decode($jsonStr, true);
-                        $token   = $decoded['choices'][0]['delta']['content'] ?? null;
-
-                        if ($token !== null && $token !== '') {
+                        $json = json_decode($data, true);
+                        $token = $json['choices'][0]['delta']['content'] ?? '';
+                        if ($token !== '') {
                             $onChunk($token);
                         }
                     }
                 }
             }
         } catch (\Throwable $e) {
-            Log::error('AI streaming error', ['message' => $e->getMessage()]);
-            $onChunk(' [Koneksi streaming terputus: ' . $e->getMessage() . ']');
+            Log::warning('AI stream error', ['provider' => $this->provider, 'message' => $e->getMessage()]);
+            $onChunk("\n[Terjadi gangguan koneksi saat streaming: " . $e->getMessage() . "]");
         }
     }
 
@@ -843,28 +851,43 @@ class AiController extends Controller
         ]);
 
         return response()->stream(function () use ($user, $validated) {
-            while (ob_get_level() > 0) {
-                ob_end_flush();
-            }
-
-            $this->ai->streamChat(
-                $user,
-                $validated['message'],
-                $validated['history'] ?? [],
-                function (string $token) {
-                    echo "data: " . json_encode(['text' => $token]) . "\n\n";
-                    if (ob_get_level() > 0) {
-                        ob_flush();
+            try {
+                // Safely clean non-zlib buffers
+                while (ob_get_level() > 0) {
+                    $status = ob_get_status();
+                    if (!empty($status['name']) && (str_contains($status['name'], 'zlib') || str_contains($status['name'], 'compress'))) {
+                        break;
                     }
-                    flush();
+                    @ob_end_clean();
                 }
-            );
 
-            echo "data: [DONE]\n\n";
-            if (ob_get_level() > 0) {
-                ob_flush();
+                $this->ai->streamChat(
+                    $user,
+                    $validated['message'],
+                    $validated['history'] ?? [],
+                    function (string $token) {
+                        echo "data: " . json_encode(['text' => $token]) . "\n\n";
+                        if (ob_get_level() > 0) {
+                            @ob_flush();
+                        }
+                        @flush();
+                    }
+                );
+
+                echo "data: [DONE]\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::error('AI Stream Error: ' . $e->getMessage());
+                echo "data: " . json_encode(['text' => "Maaf, terjadi gangguan pada AI Chatbot: " . $e->getMessage()]) . "\n\n";
+                echo "data: [DONE]\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
             }
-            flush();
         }, 200, [
             'Content-Type'      => 'text/event-stream',
             'Cache-Control'     => 'no-cache, no-transform',

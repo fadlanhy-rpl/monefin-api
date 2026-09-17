@@ -58,18 +58,25 @@ class OpenAiCompatibleProvider implements AiProvider
         $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
         try {
-            $response = Http::timeout(60)
+            $payload = [
+                'model'       => $this->model,
+                'messages'    => $messages,
+                'temperature' => $temperature,
+            ];
+
+            if (!empty($this->model)) {
+                $payload['max_tokens'] = 4096;
+            }
+
+            $response = Http::timeout(25)
                 ->withOptions(['verify' => $verifySSL])
                 ->withHeaders([
                     'Authorization' => "Bearer {$this->apiKey}",
                     'Content-Type'  => 'application/json',
+                    'HTTP-Referer'  => config('app.url', 'https://monefin.web.id'),
+                    'X-Title'       => 'MoneFin',
                 ])
-                ->post("{$this->baseUrl}/chat/completions", [
-                    'model'       => $this->model,
-                    'messages'    => $messages,
-                    'temperature' => $temperature,
-                    'max_tokens'  => 4096,
-                ]);
+                ->post("{$this->baseUrl}/chat/completions", $payload);
 
             if ($response->failed()) {
                 $body = $response->json();
@@ -91,7 +98,7 @@ class OpenAiCompatibleProvider implements AiProvider
                 'provider' => $this->provider,
                 'message'  => $e->getMessage(),
             ]);
-            return 'Terjadi kesalahan saat menghubungi AI. Periksa koneksi internet atau coba lagi.';
+            return 'Terjadi kesalahan saat menghubungi AI (' . $e->getMessage() . '). Periksa Base URL dan koneksi.';
         }
     }
 
@@ -146,8 +153,9 @@ class OpenAiCompatibleProvider implements AiProvider
 
         try {
             $client = new \GuzzleHttp\Client([
-                'timeout' => 90.0,
-                'verify'  => $verifySSL,
+                'timeout'     => 45.0,
+                'verify'      => $verifySSL,
+                'http_errors' => false,
             ]);
 
             $response = $client->post("{$this->baseUrl}/chat/completions", [
@@ -155,16 +163,26 @@ class OpenAiCompatibleProvider implements AiProvider
                     'Authorization' => "Bearer {$this->apiKey}",
                     'Content-Type'  => 'application/json',
                     'Accept'        => 'text/event-stream',
+                    'HTTP-Referer'  => config('app.url', 'https://monefin.web.id'),
+                    'X-Title'       => 'MoneFin',
                 ],
                 'json' => [
                     'model'       => $this->model,
                     'messages'    => $messages,
                     'temperature' => $temperature,
-                    'max_tokens'  => 4096,
                     'stream'      => true,
                 ],
                 'stream' => true,
             ]);
+
+            $statusCode = $response->getStatusCode();
+            if ($statusCode >= 400) {
+                $rawBody = (string) $response->getBody();
+                $errJson = json_decode($rawBody, true);
+                $errMsg  = $errJson['error']['message'] ?? "Error {$statusCode} dari AI provider.";
+                $onChunk("Error dari {$this->providerLabel()} ({$statusCode}): {$errMsg}");
+                return;
+            }
 
             $body = $response->getBody();
             $buffer = '';

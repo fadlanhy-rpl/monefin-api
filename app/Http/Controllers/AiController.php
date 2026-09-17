@@ -88,28 +88,43 @@ class AiController extends Controller
         ]);
 
         return response()->stream(function () use ($user, $validated) {
-            while (ob_get_level() > 0) {
-                ob_end_flush();
-            }
-
-            $this->ai->streamChat(
-                $user,
-                $validated['message'],
-                $validated['history'] ?? [],
-                function (string $token) {
-                    echo "data: " . json_encode(['text' => $token]) . "\n\n";
-                    if (ob_get_level() > 0) {
-                        ob_flush();
+            try {
+                // Safely clean non-zlib buffers
+                while (ob_get_level() > 0) {
+                    $status = ob_get_status();
+                    if (!empty($status['name']) && (str_contains($status['name'], 'zlib') || str_contains($status['name'], 'compress'))) {
+                        break;
                     }
-                    flush();
+                    @ob_end_clean();
                 }
-            );
 
-            echo "data: [DONE]\n\n";
-            if (ob_get_level() > 0) {
-                ob_flush();
+                $this->ai->streamChat(
+                    $user,
+                    $validated['message'],
+                    $validated['history'] ?? [],
+                    function (string $token) {
+                        echo "data: " . json_encode(['text' => $token]) . "\n\n";
+                        if (ob_get_level() > 0) {
+                            @ob_flush();
+                        }
+                        @flush();
+                    }
+                );
+
+                echo "data: [DONE]\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::error('AI Stream Error: ' . $e->getMessage());
+                echo "data: " . json_encode(['text' => "Maaf, terjadi gangguan pada AI Chatbot: " . $e->getMessage()]) . "\n\n";
+                echo "data: [DONE]\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
             }
-            flush();
         }, 200, [
             'Content-Type'      => 'text/event-stream',
             'Cache-Control'     => 'no-cache, no-transform',
