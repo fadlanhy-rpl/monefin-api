@@ -1,6 +1,6 @@
 <?php
 /**
- * MoneFin - Patch AI BYOK (xAI Grok & Custom Provider for b.ai / Qwen)
+ * MoneFin - Patch AI BYOK & Custom Provider (B.AI, Grok, Groq, etc.)
  *
  * Upload ke: monefin-backend/public/patch_ai_byok.php
  * Akses via: https://sk0010uoic.skipper.my.id/patch_ai_byok.php
@@ -10,11 +10,11 @@
 header('Content-Type: text/plain; charset=utf-8');
 
 $base = dirname(__DIR__);
-echo "=== MoneFin Patch AI BYOK (xAI Grok & Custom Provider) ===\n\n";
+echo "=== MoneFin Patch AI BYOK & Custom Providers (B.AI / OpenCode Compatible) ===\n\n";
 
 // ── 1. Update AiProviderFactory.php ───
 $factoryFile = $base . '/app/Services/Ai/AiProviderFactory.php';
-$factoryCode = <<<'PHP'
+$factoryCode = <<<'EOF_FACTORY'
 <?php
 
 namespace App\Services\Ai;
@@ -26,8 +26,8 @@ namespace App\Services\Ai;
 class AiProviderFactory
 {
     /**
-     * Available providers and their default models.
-     * Used for validation and UI population.
+     * Available providers and their recommended default models.
+     * Note: Users are completely free to specify ANY model identifier supported by the provider.
      */
     public const PROVIDERS = [
         'openai' => [
@@ -90,10 +90,10 @@ class AiProviderFactory
      */
     public static function defaultModel(string $provider): string
     {
-        return self::PROVIDERS[$provider]['models'][0] ?? '';
+        return self::PROVIDERS[$provider]['models'][0] ?? 'default';
     }
 }
-PHP;
+EOF_FACTORY;
 
 if (file_put_contents($factoryFile, $factoryCode)) {
     echo "[OK] AiProviderFactory.php berhasil di-patch.\n";
@@ -103,7 +103,7 @@ if (file_put_contents($factoryFile, $factoryCode)) {
 
 // ── 2. Update OpenAiCompatibleProvider.php ───
 $compatFile = $base . '/app/Services/Ai/OpenAiCompatibleProvider.php';
-$compatCode = <<<'PHP'
+$compatCode = <<<'EOF_COMPAT'
 <?php
 
 namespace App\Services\Ai;
@@ -113,7 +113,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Universal provider for OpenAI-compatible APIs.
- * Covers: OpenAI, Gemini (OpenAI-compat), DeepSeek, Kimi/Moonshot, xAI (Grok), Groq, and Custom endpoints (b.ai, etc.).
+ * Covers: OpenAI, Gemini (OpenAI-compat), DeepSeek, Kimi/Moonshot, xAI (Grok), Groq, and Custom endpoints (b.ai, OpenRouter, etc.).
  */
 class OpenAiCompatibleProvider implements AiProvider
 {
@@ -164,100 +164,45 @@ class OpenAiCompatibleProvider implements AiProvider
         $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
         try {
-            $response = Http::timeout(60)
+            $payload = [
+                'model'       => $this->model,
+                'messages'    => $messages,
+                'temperature' => $temperature,
+            ];
+
+            if (!empty($this->model)) {
+                $payload['max_tokens'] = 4096;
+            }
+
+            $response = Http::timeout(45)
                 ->withOptions(['verify' => $verifySSL])
                 ->withHeaders([
                     'Authorization' => "Bearer {$this->apiKey}",
                     'Content-Type'  => 'application/json',
                 ])
-                ->post("{$this->baseUrl}/chat/completions", [
-                    'model'       => $this->model,
-                    'messages'    => $messages,
-                    'temperature' => $temperature,
+                ->post("{$this->baseUrl}/chat/completions", $payload);
+
+            if ($response->failed()) {
+                $body = $response->json();
+                Log::warning('AI provider error', [
+                    'provider' => $this->provider,
+                    'status'   => $response->status(),
+                    'body'     => $response->body(),
                 ]);
 
-            if ($response->successful()) {
-                return $response->json('choices.0.message.content') ?? 'Tidak ada respons dari AI.';
+                return $this->handleError($body, $response->status());
             }
 
-            $status = $response->status();
-            $body   = $response->body();
+            $data = $response->json();
+            return $data['choices'][0]['message']['content']
+                ?? 'Maaf, saya tidak mendapatkan respons yang valid dari AI. Silakan coba lagi.';
 
-            Log::warning("AI Provider [{$this->provider}] HTTP {$status}: {$body}");
-
-            if ($this->isQuotaError($status, $body)) {
-                return $this->quotaExhaustedMessage();
-            }
-
-            return match ($status) {
-                401 => 'API key tidak valid atau telah dicabut. Periksa kembali API key Anda di Settings.',
-                429 => $this->quotaExhaustedMessage(),
-                default => "Error dari provider AI ({$status}): " . ($response->json('error.message') ?? 'Terjadi kesalahan saat memproses permintaan.'),
-            };
         } catch (\Throwable $e) {
-            Log::error("AI Provider [{$this->provider}] Exception: {$e->getMessage()}");
-
-            if ($this->isQuotaError(0, $e->getMessage())) {
-                return $this->quotaExhaustedMessage();
-            }
-
-            return 'Tidak dapat terhubung ke server AI. Periksa koneksi internet Anda atau coba lagi nanti.';
-        }
-    }
-
-    public function streamChat(array $messages, callable $onChunk, float $temperature = 0.7): void
-    {
-        $verifySSL = (bool) config('services.ai.verify_ssl', true);
-
-        $client = new \GuzzleHttp\Client([
-            'timeout' => 90,
-            'verify'  => $verifySSL,
-        ]);
-
-        $response = $client->post("{$this->baseUrl}/chat/completions", [
-            'headers' => [
-                'Authorization' => "Bearer {$this->apiKey}",
-                'Content-Type'  => 'application/json',
-                'Accept'        => 'text/event-stream',
-            ],
-            'json' => [
-                'model'       => $this->model,
-                'messages'    => $messages,
-                'temperature' => $temperature,
-                'stream'      => true,
-            ],
-            'stream' => true,
-        ]);
-
-        $body   = $response->getBody();
-        $buffer = '';
-
-        while (!$body->eof()) {
-            $chunk   = $body->read(256);
-            $buffer .= $chunk;
-
-            while (($pos = strpos($buffer, "\n")) !== false) {
-                $line   = substr($buffer, 0, $pos);
-                $buffer = substr($buffer, $pos + 1);
-                $line   = trim($line);
-
-                if (!str_starts_with($line, 'data:')) {
-                    continue;
-                }
-
-                $data = trim(substr($line, 5));
-
-                if ($data === '[DONE]') {
-                    return;
-                }
-
-                $json = json_decode($data, true);
-                $text = $json['choices'][0]['delta']['content'] ?? null;
-
-                if ($text !== null && $text !== '') {
-                    $onChunk($text);
-                }
-            }
+            Log::error('AI provider exception', [
+                'provider' => $this->provider,
+                'message'  => $e->getMessage(),
+            ]);
+            return 'Terjadi kesalahan saat menghubungi AI (' . $e->getMessage() . '). Periksa Base URL dan koneksi.';
         }
     }
 
@@ -271,35 +216,113 @@ class OpenAiCompatibleProvider implements AiProvider
         return $this->model;
     }
 
-    private function isQuotaError(int $status, string $body): bool
-    {
-        if ($status === 429) {
-            return true;
-        }
+    // ─── Private Helpers ─────────────────────────────────────────────────────
 
-        foreach (self::QUOTA_ERROR_SIGNATURES as $signature) {
-            if (stripos($body, $signature) !== false) {
-                return true;
+    private function handleError(?array $body, int $status): string
+    {
+        $errorType    = $body['error']['type']    ?? '';
+        $errorMessage = $body['error']['message'] ?? '';
+        $errorCode    = $body['error']['code']    ?? '';
+
+        $combined = strtolower($errorType . ' ' . $errorMessage . ' ' . $errorCode);
+
+        foreach (self::QUOTA_ERROR_SIGNATURES as $sig) {
+            if (str_contains($combined, strtolower($sig))) {
+                return $this->quotaExhaustedMessage();
             }
         }
 
-        return false;
+        if (!empty($errorMessage)) {
+            return "Error dari {$this->providerLabel()} ({$status}): {$errorMessage}";
+        }
+
+        if ($status === 401) {
+            return "API key {$this->providerLabel()} tidak valid atau sudah expired (401 Unauthorized).";
+        }
+
+        if ($status === 404) {
+            return "Endpoint {$this->providerLabel()} tidak ditemukan (404 Not Found). Periksa Base URL ({$this->baseUrl}).";
+        }
+
+        if ($status === 429) {
+            return $this->quotaExhaustedMessage();
+        }
+
+        return "Maaf, {$this->providerLabel()} sedang tidak tersedia (HTTP {$status}). Silakan coba beberapa saat lagi.";
+    }
+
+    public function streamChat(array $messages, callable $onChunk, float $temperature = 0.7): void
+    {
+        $verifySSL = (bool) config('services.ai.verify_ssl', true);
+
+        try {
+            $client = new \GuzzleHttp\Client([
+                'timeout' => 90.0,
+                'verify'  => $verifySSL,
+            ]);
+
+            $response = $client->post("{$this->baseUrl}/chat/completions", [
+                'headers' => [
+                    'Authorization' => "Bearer {$this->apiKey}",
+                    'Content-Type'  => 'application/json',
+                    'Accept'        => 'text/event-stream',
+                ],
+                'json' => [
+                    'model'       => $this->model,
+                    'messages'    => $messages,
+                    'temperature' => $temperature,
+                    'max_tokens'  => 4096,
+                    'stream'      => true,
+                ],
+                'stream' => true,
+            ]);
+
+            $body = $response->getBody();
+            $buffer = '';
+
+            while (!$body->eof()) {
+                $chunk = $body->read(128);
+                $buffer .= $chunk;
+
+                while (($pos = strpos($buffer, "\n")) !== false) {
+                    $line   = substr($buffer, 0, $pos);
+                    $buffer = substr($buffer, $pos + 1);
+                    $line   = trim($line);
+
+                    if (str_starts_with($line, 'data: ')) {
+                        $jsonStr = substr($line, 6);
+                        if ($jsonStr === '[DONE]') {
+                            break 2;
+                        }
+
+                        $decoded = json_decode($jsonStr, true);
+                        $token   = $decoded['choices'][0]['delta']['content'] ?? null;
+
+                        if ($token !== null && $token !== '') {
+                            $onChunk($token);
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::error('AI streaming error', ['message' => $e->getMessage()]);
+            $onChunk(' [Koneksi streaming terputus: ' . $e->getMessage() . ']');
+        }
     }
 
     private function quotaExhaustedMessage(): string
     {
-        $labels = [
+        $dashboards = [
             'openai'   => 'platform.openai.com/account/billing',
             'gemini'   => 'aistudio.google.com',
             'deepseek' => 'platform.deepseek.com',
             'kimi'     => 'platform.moonshot.cn',
             'grok'     => 'console.x.ai',
             'groq'     => 'console.groq.com',
-            'custom'   => 'dashboard penyedia API kustom Anda',
+            'custom'   => 'dashboard provider kustom Anda',
         ];
 
-        $dashboard = $labels[$this->provider] ?? 'dashboard provider Anda';
-
+        $dashboard = $dashboards[$this->provider] ?? 'dashboard provider Anda';
         return "QUOTA_EXCEEDED|{$this->providerLabel()}|{$dashboard}";
     }
 
@@ -311,13 +334,13 @@ class OpenAiCompatibleProvider implements AiProvider
             'deepseek' => 'DeepSeek',
             'kimi'     => 'Kimi (Moonshot)',
             'grok'     => 'xAI (Grok)',
-            'groq'     => 'Groq',
-            'custom'   => 'Custom Provider',
+            'groq'     => 'Groq (LPU Cloud)',
+            'custom'   => 'Custom (OpenAI-Compatible)',
             default    => ucfirst($this->provider),
         };
     }
 }
-PHP;
+EOF_COMPAT;
 
 if (file_put_contents($compatFile, $compatCode)) {
     echo "[OK] OpenAiCompatibleProvider.php berhasil di-patch.\n";
@@ -325,22 +348,411 @@ if (file_put_contents($compatFile, $compatCode)) {
     echo "[FAIL] Gagal menulis OpenAiCompatibleProvider.php.\n";
 }
 
-// ── 3. Update AiService.php ───
+// ── 3. Update AiService.php Secara Utuh ───
 $aiServiceFile = $base . '/app/Services/AiService.php';
-$aiContent = file_get_contents($aiServiceFile);
-if (strpos($aiContent, '$baseUrl = $aiConfig') === false) {
-    $search = 'return AiProviderFactory::make($provider, $apiKey, $model);';
-    $replace = '$baseUrl = $aiConfig[\'base_url\'] ?? null;' . "\n\n        " . 'return AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);';
-    $aiContent = str_replace($search, $replace, $aiContent);
-    file_put_contents($aiServiceFile, $aiContent);
-    echo "[OK] AiService.php berhasil di-patch (baseUrl pass-through).\n";
+$aiServiceCode = <<<'EOF_SERVICE'
+<?php
+
+namespace App\Services;
+
+use App\Models\Budget;
+use App\Models\Category;
+use App\Models\Transaction;
+use App\Models\User;
+use App\Services\Ai\AiProviderFactory;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
+
+class AiService
+{
+    public function __construct(
+        private readonly UserApiKeyService $keyService = new UserApiKeyService(),
+    ) {}
+
+    // ─── Public API ──────────────────────────────────────────────────────────
+
+    /**
+     * Financial chat: answer user questions using their real data as context.
+     * Requires AI to be enabled in user preferences.
+     */
+    public function chat(User $user, string $message, array $history = []): string
+    {
+        $provider = $this->makeProvider($user);
+        if (is_string($provider)) {
+            return $provider; // error message string
+        }
+
+        $context      = $this->buildUserContext($user);
+        $systemPrompt = $this->buildSystemPrompt($context);
+
+        $messages = [['role' => 'system', 'content' => $systemPrompt]];
+
+        foreach ($history as $turn) {
+            if (isset($turn['role'], $turn['content'])) {
+                $messages[] = [
+                    'role'    => $turn['role'] === 'user' ? 'user' : 'assistant',
+                    'content' => $turn['content'],
+                ];
+            }
+        }
+
+        $messages[] = ['role' => 'user', 'content' => $message];
+
+        return $provider->chat($messages);
+    }
+
+    /**
+     * Realtime streaming financial chat: stream answer token by token.
+     *
+     * @param  callable(string $token): void  $onChunk
+     */
+    public function streamChat(User $user, string $message, array $history, callable $onChunk): void
+    {
+        $provider = $this->makeProvider($user);
+        if (is_string($provider)) {
+            $onChunk($provider);
+            return;
+        }
+
+        $context      = $this->buildUserContext($user);
+        $systemPrompt = $this->buildSystemPrompt($context);
+
+        $messages = [['role' => 'system', 'content' => $systemPrompt]];
+
+        foreach ($history as $turn) {
+            if (isset($turn['role'], $turn['content'])) {
+                $messages[] = [
+                    'role'    => $turn['role'] === 'user' ? 'user' : 'assistant',
+                    'content' => $turn['content'],
+                ];
+            }
+        }
+
+        $messages[] = ['role' => 'user', 'content' => $message];
+
+        $provider->streamChat($messages, $onChunk);
+    }
+
+    /**
+     * Test connection directly using supplied credentials (used for on-the-fly testing before saving).
+     */
+    public function testConnectionDirect(string $provider, string $apiKey, ?string $model = null, ?string $baseUrl = null): array
+    {
+        if (!AiProviderFactory::isSupported($provider)) {
+            return ['ok' => false, 'message' => "Provider '{$provider}' tidak didukung."];
+        }
+
+        if (empty($model)) {
+            $model = AiProviderFactory::defaultModel($provider);
+        }
+
+        try {
+            $instance = AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);
+            $response = $instance->chat([
+                ['role' => 'user', 'content' => 'Reply with exactly: OK'],
+            ], 0.0);
+
+            $isQuotaError = str_starts_with($response, 'QUOTA_EXCEEDED|');
+            $isError      = $isQuotaError
+                || str_starts_with(strtolower($response), 'error')
+                || str_contains(strtolower($response), 'error dari')
+                || str_contains(strtolower($response), 'tidak valid')
+                || str_contains(strtolower($response), 'tidak tersedia')
+                || str_contains(strtolower($response), 'terjadi kesalahan');
+
+            if ($isQuotaError) {
+                $response = $this->formatQuotaError($response);
+            }
+
+            return [
+                'ok'       => !$isError,
+                'provider' => $instance->getProviderName(),
+                'model'    => $instance->getModelName(),
+                'message'  => $isError ? $response : 'Koneksi berhasil!',
+            ];
+        } catch (\Throwable $e) {
+            return [
+                'ok'      => false,
+                'message' => 'Gagal menghubungi AI: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Retrieve decrypted API key for a user without checking ai_enabled.
+     */
+    public function getDecryptedApiKey(User $user): ?string
+    {
+        $prefs    = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $encKey   = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? null);
+
+        if (!$encKey) {
+            return null;
+        }
+
+        try {
+            return Crypt::decryptString($encKey);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Test the user's configured AI connection with a minimal message.
+     * Returns array: ['ok' => bool, 'provider' => string, 'model' => string, 'message' => string]
+     */
+    public function testConnection(User $user): array
+    {
+        $prefs    = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $provider = $aiConfig['provider'] ?? '';
+        $model    = $aiConfig['model'] ?? '';
+        $baseUrl  = $aiConfig['base_url'] ?? null;
+        $apiKey   = $this->getDecryptedApiKey($user);
+
+        if (!$provider || !$apiKey) {
+            return ['ok' => false, 'message' => 'Konfigurasi AI belum lengkap. Masukkan provider dan API key.'];
+        }
+
+        return $this->testConnectionDirect($provider, $apiKey, $model, $baseUrl);
+    }
+
+    /**
+     * Suggest the best category for a transaction based on its description.
+     */
+    public function suggestCategory(array $categories, string $description, string $type = 'expense'): ?array
+    {
+        if (empty($categories) || empty($description)) {
+            return null;
+        }
+
+        $categoryList = collect($categories)
+            ->filter(fn($c) => ($c['type'] ?? $type) === $type || !isset($c['type']))
+            ->map(fn($c) => "ID: {$c['id']}, Nama: {$c['name']}")
+            ->join("\n");
+
+        if (empty($categoryList)) {
+            return null;
+        }
+
+        $prompt = <<<PROMPT
+Kamu adalah asisten keuangan MoneFin. Tentukan SATU kategori yang paling cocok untuk transaksi berikut.
+
+Deskripsi transaksi: "{$description}"
+Tipe: {$type}
+
+Daftar kategori yang tersedia:
+{$categoryList}
+
+Balas HANYA dengan JSON valid format: {"id": <category_id>, "confidence": <0.0-1.0>}
+Jangan tambahkan teks lain di luar JSON.
+PROMPT;
+
+        $cacheKey = 'ai_cat_' . md5($description . '_' . $type . '_' . count($categories));
+        return Cache::remember($cacheKey, 86400, function () use ($prompt, $categories) {
+            $user = auth()->user();
+            $provider = $this->makeProvider($user);
+            if (is_string($provider)) {
+                return null;
+            }
+
+            try {
+                $raw = $provider->chat([['role' => 'user', 'content' => $prompt]], 0.1);
+                $clean = preg_replace('/^```(?:json)?\s*|\s*```$/m', '', trim($raw));
+                $data = json_decode($clean, true);
+
+                if (!empty($data['id'])) {
+                    $matched = collect($categories)->firstWhere('id', (int) $data['id']);
+                    if ($matched) {
+                        return [
+                            'id'         => $matched['id'],
+                            'name'       => $matched['name'],
+                            'confidence' => $data['confidence'] ?? 0.8,
+                        ];
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('AI category suggestion failed', ['error' => $e->getMessage()]);
+            }
+
+            return null;
+        });
+    }
+
+    /**
+     * Budget recommendations based on 3-month spending history.
+     */
+    public function budgetRecommendations(User $user): array
+    {
+        $threeMonthsAgo = Carbon::now()->subMonths(3)->startOfMonth();
+
+        $spending = Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->where('date', '>=', $threeMonthsAgo)
+            ->whereNotNull('category_id')
+            ->selectRaw('category_id, SUM(amount) as total_spent, COUNT(*) as count')
+            ->groupBy('category_id')
+            ->with('category:id,name')
+            ->get()
+            ->map(fn($t) => [
+                'category_id'   => $t->category_id,
+                'category_name' => $t->category?->name ?? 'Lainnya',
+                'avg_monthly'   => round($t->total_spent / 3),
+                'total_spent'   => (float) $t->total_spent,
+                'count'         => $t->count,
+            ])
+            ->toArray();
+
+        $recommendations = collect($spending)->map(function ($s) {
+            $limit  = round($s['avg_monthly'] * 0.85 / 10000) * 10000;
+            $limit  = max($limit, 50000);
+            return [
+                'category_id'       => $s['category_id'],
+                'category_name'     => $s['category_name'],
+                'recommended_limit' => $limit,
+                'reason'            => "Rata-rata pengeluaran 3 bulan: Rp " . number_format($s['avg_monthly'], 0, ',', '.') . ". Budget hemat 85% untuk mendorong penghematan.",
+            ];
+        })->toArray();
+
+        return ['recommendations' => $recommendations, 'spending_summary' => $spending];
+    }
+
+    // ─── Private Helpers ──────────────────────────────────────────────────────
+
+    private function makeProvider(?User $user): \App\Services\Ai\AiProvider|string
+    {
+        if (!$user) {
+            return 'AI_NOT_CONFIGURED';
+        }
+
+        $prefs = $user->preferences ?? [];
+        $aiEnabled = $prefs['ai_enabled'] ?? false;
+
+        if (!$aiEnabled) {
+            return 'AI Chatbot belum diaktifkan. Aktifkan dan konfigurasikan API key di Settings → AI Chatbot.';
+        }
+
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $provider = $aiConfig['provider'] ?? '';
+        $model    = $aiConfig['model']    ?? '';
+        $encKey   = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? '');
+
+        if (!$provider || !$encKey) {
+            return 'Konfigurasi AI tidak lengkap. Silakan atur provider dan API key di Settings → AI Chatbot.';
+        }
+
+        if (!AiProviderFactory::isSupported($provider)) {
+            return "Provider AI '{$provider}' tidak didukung. Pilih provider yang tersedia di Settings.";
+        }
+
+        $apiKey = $this->getDecryptedApiKey($user);
+
+        if (!$apiKey) {
+            return 'Gagal mendekripsi API key. Silakan simpan ulang API key di Settings → AI Chatbot.';
+        }
+
+        if (empty($model)) {
+            $model = AiProviderFactory::defaultModel($provider);
+        }
+
+        $baseUrl = $aiConfig['base_url'] ?? null;
+
+        return AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);
+    }
+
+    public function formatQuotaError(string $raw): string
+    {
+        $parts     = explode('|', $raw);
+        $provider  = $parts[1] ?? 'provider AI Anda';
+        $dashboard = $parts[2] ?? 'dashboard provider';
+
+        return "Kuota atau saldo API key {$provider} Anda telah habis. Silakan isi ulang saldo di {$dashboard} atau ganti API key di Settings → AI Chatbot.";
+    }
+
+    public function isQuotaError(string $text): bool
+    {
+        return str_starts_with($text, 'QUOTA_EXCEEDED|');
+    }
+
+    private function buildUserContext(User $user): array
+    {
+        $startOfMonth = Carbon::now()->startOfMonth();
+
+        $income = (float) Transaction::where('user_id', $user->id)
+            ->where('type', 'income')
+            ->where('date', '>=', $startOfMonth)
+            ->sum('amount');
+
+        $expense = (float) Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->where('date', '>=', $startOfMonth)
+            ->sum('amount');
+
+        $budgets = Budget::where('user_id', $user->id)
+            ->where('month', Carbon::now()->format('Y-m'))
+            ->with('category:id,name')
+            ->get()
+            ->map(fn($b) => [
+                'category' => $b->category?->name ?? 'Lainnya',
+                'limit'    => (float) $b->amount,
+                'spent'    => (float) Transaction::where('user_id', $user->id)
+                    ->where('category_id', $b->category_id)
+                    ->where('type', 'expense')
+                    ->where('date', '>=', $startOfMonth)
+                    ->sum('amount'),
+            ])
+            ->toArray();
+
+        return [
+            'name'                 => $user->name,
+            'current_month'        => Carbon::now()->locale('id')->isoFormat('MMMM Y'),
+            'total_income_month'   => $income,
+            'total_expense_month'  => $expense,
+            'net_savings_month'    => $income - $expense,
+            'budgets'              => $budgets,
+        ];
+    }
+
+    private function buildSystemPrompt(array $context): string
+    {
+        $budgetsText = empty($context['budgets'])
+            ? 'Belum ada budget yang diatur bulan ini.'
+            : collect($context['budgets'])
+                ->map(fn($b) => "- {$b['category']}: Terpakai Rp " . number_format($b['spent'], 0, ',', '.') . " dari limit Rp " . number_format($b['limit'], 0, ',', '.'))
+                ->join("\n");
+
+        return <<<PROMPT
+Kamu adalah MoneFin AI, penasihat keuangan pribadi cerdas dari aplikasi MoneFin.
+Nama pengguna: {$context['name']}
+Bulan ini: {$context['current_month']}
+Total Pemasukan Bulan Ini: Rp {$context['total_income_month']}
+Total Pengeluaran Bulan Ini: Rp {$context['total_expense_month']}
+Tabungan Bersih Bulan Ini: Rp {$context['net_savings_month']}
+
+Status Budget Bulan Ini:
+{$budgetsText}
+
+Tugasmu:
+1. Berikan jawaban yang ramah, sopan, dan solutif seputar perencanaan keuangan, penghematan, dan analisis budget pengguna.
+2. Gunakan angka riil keuangan pengguna di atas jika relevan untuk menjawab pertanyaannya.
+3. Jawab dalam Bahasa Indonesia yang santun dan profesional.
+PROMPT;
+    }
+}
+EOF_SERVICE;
+
+if (file_put_contents($aiServiceFile, $aiServiceCode)) {
+    echo "[OK] AiService.php berhasil di-patch secara utuh.\n";
 } else {
-    echo "[OK] AiService.php sudah up-to-date.\n";
+    echo "[FAIL] Gagal menulis AiService.php.\n";
 }
 
 // ── 4. Update AiController.php Secara Utuh ───
 $ctrlFile = $base . '/app/Http/Controllers/AiController.php';
-$ctrlCode = <<<'PHP'
+$ctrlCode = <<<'EOF_CONTROLLER'
 <?php
 
 namespace App\Http\Controllers;
@@ -498,7 +910,7 @@ class AiController extends Controller
 
     /**
      * GET /api/ai/insights
-     * Now purely deterministic — no AI required.
+     * Purely deterministic — no AI required.
      */
     public function insights(Request $request): JsonResponse
     {
@@ -508,27 +920,36 @@ class AiController extends Controller
     }
 
     /**
-     * GET /api/ai/test-connection
-     * Test the user's configured AI provider with a minimal message.
+     * GET / POST /api/ai/test-connection
+     * Test the AI provider with a minimal message. Accepts credentials in request or falls back to saved preferences.
      */
     public function testConnection(Request $request): JsonResponse
     {
         $user  = $request->user();
         $prefs = $user->preferences ?? [];
 
-        if (empty($prefs['ai_config']['provider'] ?? '')) {
+        $provider = $request->input('provider') ?: ($prefs['ai_config']['provider'] ?? '');
+        $model    = $request->input('model')    ?: ($prefs['ai_config']['model'] ?? '');
+        $baseUrl  = $request->input('base_url') ?: ($prefs['ai_config']['base_url'] ?? null);
+        $rawKey   = $request->input('api_key');
+
+        if (empty($rawKey)) {
+            $rawKey = $this->ai->getDecryptedApiKey($user);
+        }
+
+        if (empty($provider) || empty($rawKey)) {
             return response()->json([
                 'ok'      => false,
-                'message' => 'Belum ada provider yang dikonfigurasi. Pilih provider dan masukkan API key terlebih dahulu.',
+                'message' => 'Pilih provider dan masukkan API key terlebih dahulu.',
             ], 422);
         }
 
-        $result = $this->ai->testConnection($user);
+        $result = $this->ai->testConnectionDirect($provider, $rawKey, $model, $baseUrl);
 
         return response()->json([
             'ok'       => $result['ok'],
-            'provider' => $result['provider'] ?? null,
-            'model'    => $result['model']    ?? null,
+            'provider' => $result['provider'] ?? $provider,
+            'model'    => $result['model']    ?? $model,
             'message'  => $result['message'],
         ], $result['ok'] ? 200 : 422);
     }
@@ -598,11 +1019,12 @@ class AiController extends Controller
     public function saveConfig(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'ai_enabled' => ['required', 'boolean'],
-            'provider'   => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
-            'model'      => ['nullable', 'string', 'max:255'],
-            'api_key'    => ['nullable', 'string', 'max:500'],
-            'base_url'   => ['nullable', 'string', 'max:500'],
+            'ai_enabled'   => ['required', 'boolean'],
+            'provider'     => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
+            'custom_name'  => ['nullable', 'string', 'max:100'],
+            'model'        => ['nullable', 'string', 'max:255'],
+            'api_key'      => ['nullable', 'string', 'max:500'],
+            'base_url'     => ['nullable', 'string', 'max:500'],
         ]);
 
         $user  = $request->user();
@@ -614,9 +1036,10 @@ class AiController extends Controller
             $existing = $prefs['ai_config'] ?? [];
 
             $prefs['ai_config'] = [
-                'provider' => $validated['provider'],
-                'model'    => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
-                'base_url' => !empty($validated['base_url']) ? trim($validated['base_url']) : ($existing['base_url'] ?? null),
+                'provider'    => $validated['provider'],
+                'custom_name' => !empty($validated['custom_name']) ? trim($validated['custom_name']) : ($existing['custom_name'] ?? null),
+                'model'       => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
+                'base_url'    => !empty($validated['base_url']) ? trim($validated['base_url']) : ($existing['base_url'] ?? null),
                 // Preserve existing encrypted key if no new key provided
                 'api_key_encrypted' => !empty($validated['api_key'])
                     ? Crypt::encryptString($validated['api_key'])
@@ -634,9 +1057,10 @@ class AiController extends Controller
             'message'    => 'Konfigurasi AI berhasil disimpan.',
             'ai_enabled' => $prefs['ai_enabled'],
             'ai_config'  => [
-                'provider'       => $prefs['ai_config']['provider']      ?? null,
-                'model'          => $prefs['ai_config']['model']         ?? null,
-                'base_url'       => $prefs['ai_config']['base_url']      ?? null,
+                'provider'       => $prefs['ai_config']['provider']       ?? null,
+                'custom_name'    => $prefs['ai_config']['custom_name']    ?? null,
+                'model'          => $prefs['ai_config']['model']          ?? null,
+                'base_url'       => $prefs['ai_config']['base_url']       ?? null,
                 'api_key_masked' => $prefs['ai_config']['api_key_masked'] ?? null,
             ],
         ]);
@@ -651,7 +1075,7 @@ class AiController extends Controller
         return substr($key, 0, 6) . str_repeat('*', max(4, $len - 10)) . substr($key, -4);
     }
 }
-PHP;
+EOF_CONTROLLER;
 
 if (file_put_contents($ctrlFile, $ctrlCode)) {
     echo "[OK] AiController.php berhasil di-patch secara utuh.\n";
@@ -659,20 +1083,117 @@ if (file_put_contents($ctrlFile, $ctrlCode)) {
     echo "[FAIL] Gagal menulis AiController.php.\n";
 }
 
-// ── 5. Update UserApiKeyService.php ───
+// ── 5. Update UserApiKeyService.php Secara Utuh ───
 $keyServiceFile = $base . '/app/Services/UserApiKeyService.php';
-$keyCode = file_get_contents($keyServiceFile);
-if (strpos($keyCode, '$aiConfig[\'api_key_encrypted\'] ??') === false) {
-    $searchKey = '$encryptedKey = $aiConfig[\'api_key\'] ?? null;';
-    $replaceKey = '$encryptedKey = $aiConfig[\'api_key_encrypted\'] ?? ($aiConfig[\'api_key\'] ?? null);';
-    $keyCode = str_replace($searchKey, $replaceKey, $keyCode);
-    file_put_contents($keyServiceFile, $keyCode);
-    echo "[OK] UserApiKeyService.php berhasil di-patch.\n";
+$keyServiceCode = <<<'EOF_KEYSERVICE'
+<?php
+
+namespace App\Services;
+
+use App\Models\User;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
+
+/**
+ * Service to securely manage Bring-Your-Own-Key (BYOK) encryption and decryption
+ * with a high-throughput memory cache layer to eliminate redundant DB reads and AES crypto overhead.
+ */
+class UserApiKeyService
+{
+    public const CACHE_TTL_SECONDS = 900; // 15 Minutes
+
+    /**
+     * Store and encrypt a user API key.
+     */
+    public function storeKey(User $user, string $provider, string $rawKey, array $extraConfig = []): void
+    {
+        $encrypted = Crypt::encryptString($rawKey);
+
+        $prefs = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+
+        $aiConfig['provider'] = $provider;
+        $aiConfig['api_key'] = $encrypted;
+        foreach ($extraConfig as $k => $v) {
+            $aiConfig[$k] = $v;
+        }
+
+        $prefs['ai_config'] = $aiConfig;
+        $prefs['ai_enabled'] = true;
+        $user->preferences = $prefs;
+        $user->save();
+
+        // Bust cache
+        Cache::forget("user:{$user->id}:ai_key:{$provider}");
+        Cache::forget("user:{$user->id}:ai_key:active");
+    }
+
+    /**
+     * Retrieve decrypted API key with Cache layer (15 min TTL).
+     */
+    public function getDecryptedKey(User $user, ?string $provider = null): ?string
+    {
+        $prefs = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $targetProvider = $provider ?: ($aiConfig['provider'] ?? 'openai');
+        $encryptedKey = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? null);
+
+        if (!$encryptedKey) {
+            return null;
+        }
+
+        $cacheKey = "user:{$user->id}:ai_key:{$targetProvider}";
+
+        return Cache::remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($encryptedKey) {
+            try {
+                return Crypt::decryptString($encryptedKey);
+            } catch (\Throwable $e) {
+                Log::warning("Failed to decrypt user AI API key: {$e->getMessage()}");
+                return null;
+            }
+        });
+    }
+
+    /**
+     * Clear cached API key for a user.
+     */
+    public function clearKeyCache(User $user, ?string $provider = null): void
+    {
+        if ($provider) {
+            Cache::forget("user:{$user->id}:ai_key:{$provider}");
+        }
+        Cache::forget("user:{$user->id}:ai_key:active");
+        Cache::forget("user:{$user->id}:ai_key:openai");
+        Cache::forget("user:{$user->id}:ai_key:claude");
+        Cache::forget("user:{$user->id}:ai_key:openrouter");
+        Cache::forget("user:{$user->id}:ai_key:gemini");
+    }
+}
+EOF_KEYSERVICE;
+
+if (file_put_contents($keyServiceFile, $keyServiceCode)) {
+    echo "[OK] UserApiKeyService.php berhasil di-patch secara utuh.\n";
 } else {
-    echo "[OK] UserApiKeyService.php sudah up-to-date.\n";
+    echo "[FAIL] Gagal menulis UserApiKeyService.php.\n";
 }
 
-// ── 6. Refresh Laravel Cache ───
+// ── 6. Update routes/api.php ───
+$routesFile = $base . '/routes/api.php';
+$routesContent = file_get_contents($routesFile);
+if (strpos($routesContent, "Route::match(['get', 'post'], '/test-connection'") === false) {
+    $routesContent = str_replace(
+        "Route::get('/test-connection'",
+        "Route::match(['get', 'post'], '/test-connection'",
+        $routesContent
+    );
+    file_put_contents($routesFile, $routesContent);
+    echo "[OK] routes/api.php berhasil di-patch (support GET & POST test-connection).\n";
+} else {
+    echo "[OK] routes/api.php sudah up-to-date.\n";
+}
+
+// ── 7. Refresh Laravel Cache ───
 try {
     require $base . '/vendor/autoload.php';
     $app = require_once $base . '/bootstrap/app.php';

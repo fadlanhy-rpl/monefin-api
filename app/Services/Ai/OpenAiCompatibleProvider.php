@@ -121,19 +121,23 @@ class OpenAiCompatibleProvider implements AiProvider
             }
         }
 
+        if (!empty($errorMessage)) {
+            return "Error dari {$this->providerLabel()} ({$status}): {$errorMessage}";
+        }
+
         if ($status === 401) {
-            return "API key {$this->providerLabel()} tidak valid atau sudah expired. Silakan perbarui API key di Settings → AI Chatbot.";
+            return "API key {$this->providerLabel()} tidak valid atau sudah expired (401 Unauthorized).";
+        }
+
+        if ($status === 404) {
+            return "Endpoint {$this->providerLabel()} tidak ditemukan (404 Not Found). Periksa Base URL ({$this->baseUrl}).";
         }
 
         if ($status === 429) {
             return $this->quotaExhaustedMessage();
         }
 
-        if (!empty($errorMessage)) {
-            return "Error dari {$this->providerLabel()}: {$errorMessage}";
-        }
-
-        return "Maaf, {$this->providerLabel()} sedang tidak tersedia. Silakan coba beberapa saat lagi.";
+        return "Maaf, {$this->providerLabel()} sedang tidak tersedia (HTTP {$status}). Silakan coba beberapa saat lagi.";
     }
 
     public function streamChat(array $messages, callable $onChunk, float $temperature = 0.7): void

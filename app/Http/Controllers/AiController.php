@@ -165,27 +165,36 @@ class AiController extends Controller
     }
 
     /**
-     * GET /api/ai/test-connection
-     * Test the user's configured AI provider with a minimal message.
+     * GET / POST /api/ai/test-connection
+     * Test the AI provider with a minimal message. Accepts credentials in request or falls back to saved preferences.
      */
     public function testConnection(Request $request): JsonResponse
     {
         $user  = $request->user();
         $prefs = $user->preferences ?? [];
 
-        if (empty($prefs['ai_config']['provider'] ?? '')) {
+        $provider = $request->input('provider') ?: ($prefs['ai_config']['provider'] ?? '');
+        $model    = $request->input('model')    ?: ($prefs['ai_config']['model'] ?? '');
+        $baseUrl  = $request->input('base_url') ?: ($prefs['ai_config']['base_url'] ?? null);
+        $rawKey   = $request->input('api_key');
+
+        if (empty($rawKey)) {
+            $rawKey = $this->ai->getDecryptedApiKey($user);
+        }
+
+        if (empty($provider) || empty($rawKey)) {
             return response()->json([
                 'ok'      => false,
-                'message' => 'Belum ada provider yang dikonfigurasi. Pilih provider dan masukkan API key terlebih dahulu.',
+                'message' => 'Pilih provider dan masukkan API key terlebih dahulu.',
             ], 422);
         }
 
-        $result = $this->ai->testConnection($user);
+        $result = $this->ai->testConnectionDirect($provider, $rawKey, $model, $baseUrl);
 
         return response()->json([
             'ok'       => $result['ok'],
-            'provider' => $result['provider'] ?? null,
-            'model'    => $result['model']    ?? null,
+            'provider' => $result['provider'] ?? $provider,
+            'model'    => $result['model']    ?? $model,
             'message'  => $result['message'],
         ], $result['ok'] ? 200 : 422);
     }
@@ -255,11 +264,12 @@ class AiController extends Controller
     public function saveConfig(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'ai_enabled' => ['required', 'boolean'],
-            'provider'   => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
-            'model'      => ['nullable', 'string', 'max:255'],
-            'api_key'    => ['nullable', 'string', 'max:500'],
-            'base_url'   => ['nullable', 'string', 'max:500'],
+            'ai_enabled'   => ['required', 'boolean'],
+            'provider'     => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
+            'custom_name'  => ['nullable', 'string', 'max:100'],
+            'model'        => ['nullable', 'string', 'max:255'],
+            'api_key'      => ['nullable', 'string', 'max:500'],
+            'base_url'     => ['nullable', 'string', 'max:500'],
         ]);
 
         $user  = $request->user();
@@ -271,9 +281,10 @@ class AiController extends Controller
             $existing = $prefs['ai_config'] ?? [];
 
             $prefs['ai_config'] = [
-                'provider' => $validated['provider'],
-                'model'    => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
-                'base_url' => !empty($validated['base_url']) ? trim($validated['base_url']) : ($existing['base_url'] ?? null),
+                'provider'    => $validated['provider'],
+                'custom_name' => !empty($validated['custom_name']) ? trim($validated['custom_name']) : ($existing['custom_name'] ?? null),
+                'model'       => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
+                'base_url'    => !empty($validated['base_url']) ? trim($validated['base_url']) : ($existing['base_url'] ?? null),
                 // Preserve existing encrypted key if no new key provided
                 'api_key_encrypted' => !empty($validated['api_key'])
                     ? Crypt::encryptString($validated['api_key'])
@@ -291,9 +302,10 @@ class AiController extends Controller
             'message'    => 'Konfigurasi AI berhasil disimpan.',
             'ai_enabled' => $prefs['ai_enabled'],
             'ai_config'  => [
-                'provider'       => $prefs['ai_config']['provider']      ?? null,
-                'model'          => $prefs['ai_config']['model']         ?? null,
-                'base_url'       => $prefs['ai_config']['base_url']      ?? null,
+                'provider'       => $prefs['ai_config']['provider']       ?? null,
+                'custom_name'    => $prefs['ai_config']['custom_name']    ?? null,
+                'model'          => $prefs['ai_config']['model']          ?? null,
+                'base_url'       => $prefs['ai_config']['base_url']       ?? null,
                 'api_key_masked' => $prefs['ai_config']['api_key_masked'] ?? null,
             ],
         ]);

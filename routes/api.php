@@ -152,7 +152,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Test connection — hanya saat setup, 3x per 10 menit
         Route::middleware('throttle:ai-connection-test')->group(function () {
-            Route::get('/test-connection', [AiController::class, 'testConnection']);
+            Route::match(['get', 'post'], '/test-connection', [AiController::class, 'testConnection']);
         });
 
         // Endpoint lainnya — limit umum 20 req/menit

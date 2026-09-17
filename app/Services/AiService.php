@@ -89,31 +89,83 @@ class AiService
      */
     public function testConnection(User $user): array
     {
-        $provider = $this->makeProvider($user);
-        if (is_string($provider)) {
-            return ['ok' => false, 'message' => $provider];
+        $prefs    = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $provider = $aiConfig['provider'] ?? '';
+        $model    = $aiConfig['model'] ?? '';
+        $baseUrl  = $aiConfig['base_url'] ?? null;
+        $apiKey   = $this->getDecryptedApiKey($user);
+
+        if (!$provider || !$apiKey) {
+            return ['ok' => false, 'message' => 'Konfigurasi AI belum lengkap. Masukkan provider dan API key.'];
         }
 
-        $response = $provider->chat([
-            ['role' => 'user', 'content' => 'Reply with exactly: OK'],
-        ], 0.0);
+        return $this->testConnectionDirect($provider, $apiKey, $model, $baseUrl);
+    }
 
-        $isQuotaError = str_starts_with($response, 'QUOTA_EXCEEDED|');
-        $isError      = $isQuotaError
-            || str_contains(strtolower($response), 'error')
-            || str_contains(strtolower($response), 'tidak valid')
-            || str_contains(strtolower($response), 'tidak tersedia');
-
-        if ($isQuotaError) {
-            $response = $this->formatQuotaError($response);
+    /**
+     * Test connection directly using supplied credentials (used for on-the-fly testing before saving).
+     */
+    public function testConnectionDirect(string $provider, string $apiKey, ?string $model = null, ?string $baseUrl = null): array
+    {
+        if (!AiProviderFactory::isSupported($provider)) {
+            return ['ok' => false, 'message' => "Provider '{$provider}' tidak didukung."];
         }
 
-        return [
-            'ok'       => !$isError,
-            'provider' => $provider->getProviderName(),
-            'model'    => $provider->getModelName(),
-            'message'  => $isError ? $response : 'Koneksi berhasil!',
-        ];
+        if (empty($model)) {
+            $model = AiProviderFactory::defaultModel($provider);
+        }
+
+        try {
+            $instance = AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);
+            $response = $instance->chat([
+                ['role' => 'user', 'content' => 'Reply with exactly: OK'],
+            ], 0.0);
+
+            $isQuotaError = str_starts_with($response, 'QUOTA_EXCEEDED|');
+            $isError      = $isQuotaError
+                || str_starts_with(strtolower($response), 'error')
+                || str_contains(strtolower($response), 'error dari')
+                || str_contains(strtolower($response), 'tidak valid')
+                || str_contains(strtolower($response), 'tidak tersedia')
+                || str_contains(strtolower($response), 'terjadi kesalahan');
+
+            if ($isQuotaError) {
+                $response = $this->formatQuotaError($response);
+            }
+
+            return [
+                'ok'       => !$isError,
+                'provider' => $instance->getProviderName(),
+                'model'    => $instance->getModelName(),
+                'message'  => $isError ? $response : 'Koneksi berhasil!',
+            ];
+        } catch (\Throwable $e) {
+            return [
+                'ok'      => false,
+                'message' => 'Gagal menghubungi AI: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Retrieve decrypted API key for a user without checking ai_enabled.
+     */
+    public function getDecryptedApiKey(User $user): ?string
+    {
+        $prefs    = $user->preferences ?? [];
+        $aiConfig = $prefs['ai_config'] ?? [];
+        $encKey   = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? null);
+
+        if (!$encKey) {
+            return null;
+        }
+
+        try {
+            return Crypt::decryptString($encKey);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**
