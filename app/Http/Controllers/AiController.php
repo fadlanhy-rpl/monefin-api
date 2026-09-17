@@ -257,7 +257,7 @@ class AiController extends Controller
         $validated = $request->validate([
             'ai_enabled' => ['required', 'boolean'],
             'provider'   => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
-            'model'      => ['nullable', 'string', 'max:100'],
+            'model'      => ['nullable', 'string', 'max:255'],
             'api_key'    => ['nullable', 'string', 'max:500'],
             'base_url'   => ['nullable', 'string', 'max:500'],
         ]);

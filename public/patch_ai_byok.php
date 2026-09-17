@@ -60,7 +60,7 @@ class AiProviderFactory
         ],
         'custom' => [
             'label'     => 'Custom (OpenAI-Compatible)',
-            'models'    => ['qwen-2.5-72b-instruct', 'qwen-2.5-32b-instruct', 'deepseek-r1', 'llama-3.3-70b-instruct'],
+            'models'    => ['qwen', 'qwen-2.5-72b-instruct', 'qwen-2.5-32b-instruct', 'deepseek-r1', 'llama-3.3-70b-instruct'],
             'is_custom' => true,
         ],
     ];
@@ -600,7 +600,7 @@ class AiController extends Controller
         $validated = $request->validate([
             'ai_enabled' => ['required', 'boolean'],
             'provider'   => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
-            'model'      => ['nullable', 'string', 'max:100'],
+            'model'      => ['nullable', 'string', 'max:255'],
             'api_key'    => ['nullable', 'string', 'max:500'],
             'base_url'   => ['nullable', 'string', 'max:500'],
         ]);

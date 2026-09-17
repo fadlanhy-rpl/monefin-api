@@ -9,8 +9,8 @@ namespace App\Services\Ai;
 class AiProviderFactory
 {
     /**
-     * Available providers and their default models.
-     * Used for validation and UI population.
+     * Available providers and their recommended default models.
+     * Note: Users are completely free to specify ANY model identifier supported by the provider.
      */
     public const PROVIDERS = [
         'openai' => [
@@ -43,7 +43,7 @@ class AiProviderFactory
         ],
         'custom' => [
             'label'     => 'Custom (OpenAI-Compatible)',
-            'models'    => ['qwen-2.5-72b-instruct', 'qwen-2.5-32b-instruct', 'deepseek-r1', 'llama-3.3-70b-instruct'],
+            'models'    => ['qwen', 'qwen-2.5-72b-instruct', 'qwen-2.5-32b-instruct', 'deepseek-r1', 'llama-3.3-70b-instruct'],
             'is_custom' => true,
         ],
     ];
