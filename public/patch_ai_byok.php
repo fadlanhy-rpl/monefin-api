@@ -1193,7 +1193,22 @@ if (strpos($routesContent, "Route::match(['get', 'post'], '/test-connection'") =
     echo "[OK] routes/api.php sudah up-to-date.\n";
 }
 
-// ── 7. Refresh Laravel Cache ───
+// ── 7. Update AppServiceProvider.php (Relax ai-connection-test rate limiter) ───
+$providerFile = $base . '/app/Providers/AppServiceProvider.php';
+$providerContent = file_get_contents($providerFile);
+if (strpos($providerContent, 'Limit::perMinutes(10, 3)') !== false) {
+    $providerContent = str_replace(
+        "Limit::perMinutes(10, 3)->by('ai-test:' . \$request->user()->id)",
+        "Limit::perMinute(30)->by('ai-test:' . \$request->user()->id)",
+        $providerContent
+    );
+    file_put_contents($providerFile, $providerContent);
+    echo "[OK] AppServiceProvider.php berhasil di-patch (rate limit dilonggarkan ke 30 req/menit).\n";
+} else {
+    echo "[OK] AppServiceProvider.php rate limit sudah up-to-date.\n";
+}
+
+// ── 8. Refresh Laravel Cache & Reset Rate Limiter ───
 try {
     require $base . '/vendor/autoload.php';
     $app = require_once $base . '/bootstrap/app.php';
@@ -1202,7 +1217,8 @@ try {
 
     \Illuminate\Support\Facades\Artisan::call('route:clear');
     \Illuminate\Support\Facades\Artisan::call('config:clear');
-    echo "\n[OK] Route & Config cache berhasil dibersihkan.\n";
+    \Illuminate\Support\Facades\Cache::flush();
+    echo "\n[OK] Route, Config, dan Cache (Rate Limiter) berhasil dibersihkan & di-reset!\n";
 } catch (\Throwable $e) {
     echo "\n[INFO] Artisan clear: " . $e->getMessage() . "\n";
 }
