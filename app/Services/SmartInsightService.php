@@ -60,9 +60,25 @@ class SmartInsightService
 
     private function getAiInsight(User $user, string $page, array $ctx, array $prefs, string $lang): ?array
     {
+        // Fast-path Guard: Jika halaman belum memiliki data inti (misal belum ada budget),
+        // langsung fallback ke MoneFin Engine tanpa membuang waktu dan koneksi panggil AI.
+        if ($page === 'budgets' && empty($ctx['budgets'])) {
+            return null;
+        }
+        if ($page === 'accounts' && empty($ctx['accounts'])) {
+            return null;
+        }
+        if ($page === 'goals' && empty($ctx['goals'])) {
+            return null;
+        }
+
         $aiConfig = $prefs['ai_config'] ?? [];
         $provider = $aiConfig['provider'] ?? '';
         $model    = $aiConfig['model']    ?? '';
+
+        if (empty($provider)) {
+            return null;
+        }
 
         $contextText = $this->contextBuilder->contextToText($ctx, $page);
         $pageLabel   = $this->contextBuilder->pageLabel($page, $lang);
