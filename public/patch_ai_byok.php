@@ -275,7 +275,7 @@ class OpenAiCompatibleProvider implements AiProvider
                     'model'       => $this->model,
                     'messages'    => $messages,
                     'temperature' => $temperature,
-                    'max_tokens'  => 1200,
+                    'max_tokens'  => 4096,
                     'stream'      => true,
                 ],
                 'stream' => true,
@@ -313,20 +313,25 @@ class OpenAiCompatibleProvider implements AiProvider
                         $json = json_decode($data, true);
                         $token = $json['choices'][0]['delta']['content'] ?? '';
                         if ($token !== '') {
-                            // Filter out <think> ... </think> reasoning tokens
+                            // Filter out <think> ... </think> reasoning tokens from streaming
+                            // Handle opening <think> tag (may appear mid-token)
                             if (str_contains($token, '<think>')) {
+                                $before = substr($token, 0, strpos($token, '<think>'));
+                                if ($before !== '') $onChunk($before);
+                                $token = '';
                                 $inThink = true;
-                                $token = substr($token, 0, strpos($token, '<think>'));
                             }
-                            if ($inThink) {
+                            // While inside think block, search for closing tag
+                            if ($inThink && $token !== '') {
                                 if (str_contains($token, '</think>')) {
                                     $inThink = false;
-                                    $token = substr($token, strpos($token, '</think>') + 8);
+                                    $after = substr($token, strpos($token, '</think>') + 8);
+                                    $token = $after;
                                 } else {
-                                    $token = '';
+                                    $token = ''; // discard reasoning token
                                 }
                             }
-                            if ($token !== '') {
+                            if (!$inThink && $token !== '') {
                                 $onChunk($token);
                             }
                         }
