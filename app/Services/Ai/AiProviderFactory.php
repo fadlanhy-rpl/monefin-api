@@ -73,6 +73,6 @@ class AiProviderFactory
      */
     public static function defaultModel(string $provider): string
     {
-        return self::PROVIDERS[$provider]['models'][0] ?? '';
+        return self::PROVIDERS[$provider]['models'][0] ?? 'default';
     }
 }

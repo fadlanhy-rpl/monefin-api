@@ -178,7 +178,7 @@ class AiController extends Controller
 
     /**
      * GET /api/ai/insights
-     * Now purely deterministic — no AI required.
+     * Purely deterministic — no AI required.
      */
     public function insights(Request $request): JsonResponse
     {

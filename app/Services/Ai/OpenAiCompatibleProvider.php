@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Universal provider for OpenAI-compatible APIs.
- * Covers: OpenAI, Gemini (OpenAI-compat), DeepSeek, Kimi/Moonshot, Groq.
+ * Covers: OpenAI, Gemini (OpenAI-compat), DeepSeek, Kimi/Moonshot, xAI (Grok), Groq, and Custom endpoints (b.ai, OpenRouter, etc.).
  */
 class OpenAiCompatibleProvider implements AiProvider
 {
@@ -87,8 +87,9 @@ class OpenAiCompatibleProvider implements AiProvider
             }
 
             $data = $response->json();
-            return $data['choices'][0]['message']['content']
+            $rawContent = $data['choices'][0]['message']['content']
                 ?? 'Maaf, saya tidak mendapatkan respons yang valid dari AI. Silakan coba lagi.';
+            return trim(preg_replace('/<think>.*?<\/think>/s', '', $rawContent));
 
         } catch (\Throwable $e) {
             Log::error('AI provider exception', [
@@ -183,9 +184,10 @@ class OpenAiCompatibleProvider implements AiProvider
 
             $body = $response->getBody();
             $buffer = '';
+            $inThink = false;
 
             while (!$body->eof()) {
-                $chunk = $body->read(64);
+                $chunk = $body->read(1024);
                 if ($chunk === '') {
                     usleep(5000);
                     continue;
@@ -203,7 +205,22 @@ class OpenAiCompatibleProvider implements AiProvider
                         $json = json_decode($data, true);
                         $token = $json['choices'][0]['delta']['content'] ?? '';
                         if ($token !== '') {
-                            $onChunk($token);
+                            // Filter out <think> ... </think> reasoning tokens
+                            if (str_contains($token, '<think>')) {
+                                $inThink = true;
+                                $token = substr($token, 0, strpos($token, '<think>'));
+                            }
+                            if ($inThink) {
+                                if (str_contains($token, '</think>')) {
+                                    $inThink = false;
+                                    $token = substr($token, strpos($token, '</think>') + 8);
+                                } else {
+                                    $token = '';
+                                }
+                            }
+                            if ($token !== '') {
+                                $onChunk($token);
+                            }
                         }
                     }
                 }
@@ -216,18 +233,17 @@ class OpenAiCompatibleProvider implements AiProvider
 
     private function quotaExhaustedMessage(): string
     {
-        $labels = [
+        $dashboards = [
             'openai'   => 'platform.openai.com/account/billing',
             'gemini'   => 'aistudio.google.com',
             'deepseek' => 'platform.deepseek.com',
             'kimi'     => 'platform.moonshot.cn',
             'grok'     => 'console.x.ai',
             'groq'     => 'console.groq.com',
-            'custom'   => 'dashboard penyedia API kustom Anda',
+            'custom'   => 'dashboard provider kustom Anda',
         ];
 
-        $dashboard = $labels[$this->provider] ?? 'dashboard provider Anda';
-
+        $dashboard = $dashboards[$this->provider] ?? 'dashboard provider Anda';
         return "QUOTA_EXCEEDED|{$this->providerLabel()}|{$dashboard}";
     }
 
@@ -239,8 +255,8 @@ class OpenAiCompatibleProvider implements AiProvider
             'deepseek' => 'DeepSeek',
             'kimi'     => 'Kimi (Moonshot)',
             'grok'     => 'xAI (Grok)',
-            'groq'     => 'Groq',
-            'custom'   => 'Custom Provider',
+            'groq'     => 'Groq (LPU Cloud)',
+            'custom'   => 'Custom (OpenAI-Compatible)',
             default    => ucfirst($this->provider),
         };
     }
