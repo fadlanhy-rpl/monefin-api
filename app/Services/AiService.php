@@ -119,8 +119,8 @@ class AiService
         try {
             $instance = AiProviderFactory::make($provider, $apiKey, $model, $baseUrl);
             $response = $instance->chat([
-                ['role' => 'user', 'content' => 'Reply with exactly: OK'],
-            ], 0.0);
+                ['role' => 'user', 'content' => 'Say OK'],
+            ], 0.0, 15);
 
             $isQuotaError = str_starts_with($response, 'QUOTA_EXCEEDED|');
             $isError      = $isQuotaError
@@ -128,7 +128,8 @@ class AiService
                 || str_contains(strtolower($response), 'error dari')
                 || str_contains(strtolower($response), 'tidak valid')
                 || str_contains(strtolower($response), 'tidak tersedia')
-                || str_contains(strtolower($response), 'terjadi kesalahan');
+                || str_contains(strtolower($response), 'terjadi kesalahan')
+                || str_contains(strtolower($response), 'curl error');
 
             if ($isQuotaError) {
                 $response = $this->formatQuotaError($response);
@@ -138,7 +139,7 @@ class AiService
                 'ok'       => !$isError,
                 'provider' => $instance->getProviderName(),
                 'model'    => $instance->getModelName(),
-                'message'  => $isError ? $response : 'Koneksi berhasil!',
+                'message'  => $isError ? $response : 'Koneksi berhasil! Model aktif dan siap digunakan.',
             ];
         } catch (\Throwable $e) {
             return [

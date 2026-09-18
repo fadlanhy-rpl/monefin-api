@@ -53,7 +53,7 @@ class OpenAiCompatibleProvider implements AiProvider
         }
     }
 
-    public function chat(array $messages, float $temperature = 0.7): string
+    public function chat(array $messages, float $temperature = 0.7, int $maxTokens = 4096): string
     {
         $verifySSL = (bool) config('services.ai.verify_ssl', true);
 
@@ -62,13 +62,10 @@ class OpenAiCompatibleProvider implements AiProvider
                 'model'       => $this->model,
                 'messages'    => $messages,
                 'temperature' => $temperature,
+                'max_tokens'  => $maxTokens,
             ];
 
-            if (!empty($this->model)) {
-                $payload['max_tokens'] = 4096;
-            }
-
-            $response = Http::timeout(25)
+            $response = Http::timeout(30)
                 ->withOptions(['verify' => $verifySSL])
                 ->withHeaders([
                     'Authorization' => "Bearer {$this->apiKey}",
