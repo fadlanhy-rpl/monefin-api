@@ -151,9 +151,10 @@ class OpenAiCompatibleProvider implements AiProvider
 
         try {
             $client = new \GuzzleHttp\Client([
-                'timeout'     => 45.0,
-                'verify'      => $verifySSL,
-                'http_errors' => false,
+                'timeout'      => 180.0,
+                'read_timeout' => 120.0,
+                'verify'       => $verifySSL,
+                'http_errors'  => false,
             ]);
 
             $response = $client->post("{$this->baseUrl}/chat/completions", [
@@ -168,6 +169,7 @@ class OpenAiCompatibleProvider implements AiProvider
                     'model'       => $this->model,
                     'messages'    => $messages,
                     'temperature' => $temperature,
+                    'max_tokens'  => 1200,
                     'stream'      => true,
                 ],
                 'stream' => true,

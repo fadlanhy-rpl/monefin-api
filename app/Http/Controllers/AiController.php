@@ -88,6 +88,8 @@ class AiController extends Controller
         ]);
 
         return response()->stream(function () use ($user, $validated) {
+            @set_time_limit(300);
+            @ini_set('max_execution_time', '300');
             if (function_exists('apache_setenv')) {
                 @apache_setenv('no-gzip', '1');
             }
