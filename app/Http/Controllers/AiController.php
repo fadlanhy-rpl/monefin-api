@@ -108,6 +108,13 @@ class AiController extends Controller
                     @ob_end_clean();
                 }
 
+                // Send 2KB initial SSE comment padding to immediately disable LiteSpeed / reverse-proxy buffering
+                echo ": " . str_repeat(" ", 2048) . "\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
+
                 $this->ai->streamChat(
                     $user,
                     $validated['message'],
