@@ -60,6 +60,17 @@ return [
             'report' => false,
         ],
 
+        // Disk untuk shared hosting (nginx) tanpa symlink
+        // File disimpan di public/uploads/ agar dapat diakses langsung
+        'uploads' => [
+            'driver' => 'local',
+            'root' => public_path('uploads'),
+            'url' => rtrim(env('APP_URL', 'http://localhost'), '/') . '/uploads',
+            'visibility' => 'public',
+            'throw' => false,
+            'report' => false,
+        ],
+
     ],
 
     /*

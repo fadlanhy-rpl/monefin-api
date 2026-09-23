@@ -33,13 +33,28 @@ class TransactionController extends Controller
                     $sq->where('description', $operator, "%{$search}%")
                        ->orWhereHas('category', fn ($c) => $c->where('name', $operator, "%{$search}%"));
                 });
-            })
-            ->orderBy('transaction_date', 'desc')
-            ->orderBy('created_at', 'desc');
+            });
 
-        $perPage = $request->per_page ?? 20;
+        $summary = (clone $query)
+            ->reorder()
+            ->selectRaw("
+                COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as total_income,
+                COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as total_expense
+            ")
+            ->first();
 
-        return TransactionResource::collection($query->paginate($perPage));
+        $query->orderBy('transaction_date', 'desc')
+              ->orderBy('created_at', 'desc');
+
+        $perPage = min((int) ($request->per_page ?? 10), 100);
+
+        return TransactionResource::collection($query->paginate($perPage))
+            ->additional([
+                'summary' => [
+                    'income'  => (float) ($summary->total_income ?? 0),
+                    'expense' => (float) ($summary->total_expense ?? 0),
+                ],
+            ]);
     }
 
     public function store(Request $request): JsonResponse

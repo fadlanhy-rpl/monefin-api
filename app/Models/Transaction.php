@@ -20,11 +20,14 @@ class Transaction extends Model
         'amount',
         'description',
         'transaction_date',
+        'receipt_image_path',
+        'receipt_data',
     ];
 
     protected $casts = [
         'amount' => 'decimal:2',
         'transaction_date' => 'date',
+        'receipt_data' => 'array',
     ];
 
     public function user(): BelongsTo

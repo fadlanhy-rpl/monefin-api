@@ -202,6 +202,8 @@ class AiController extends Controller
      */
     public function testConnection(Request $request): JsonResponse
     {
+        @set_time_limit(60);
+
         $user  = $request->user();
         $prefs = $user->preferences ?? [];
 

@@ -76,10 +76,12 @@ class SpendingAnalysisService
             ->latest()
             ->first();
 
+        $dbPercent = min(999.99, max(0.00, (float) ($result['spent_percent'] ?? 0)));
+
         if ($existing && $existing->type === $result['status']) {
             // Status tidak berubah, update angka tapi tidak buat record baru
             $existing->update([
-                'spent_percent' => $result['spent_percent'],
+                'spent_percent' => $dbPercent,
                 'message'       => $result['message'],
             ]);
             return;
@@ -90,7 +92,7 @@ class SpendingAnalysisService
             'type'         => $result['status'],
             'period_type'  => $result['period_type'],
             'period_label' => $result['period_label'],
-            'spent_percent'=> $result['spent_percent'],
+            'spent_percent'=> $dbPercent,
             'message'      => $result['message'],
             'is_read'      => false,
         ]);

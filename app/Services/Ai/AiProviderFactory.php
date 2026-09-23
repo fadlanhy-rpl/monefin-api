@@ -19,7 +19,7 @@ class AiProviderFactory
         ],
         'gemini' => [
             'label'  => 'Google Gemini',
-            'models' => ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+            'models' => ['gemini-flash-latest', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.8-flash'],
         ],
         'deepseek' => [
             'label'  => 'DeepSeek',
@@ -43,7 +43,7 @@ class AiProviderFactory
         ],
         'custom' => [
             'label'     => 'Custom (OpenAI-Compatible)',
-            'models'    => ['qwen', 'qwen-2.5-72b-instruct', 'qwen-2.5-32b-instruct', 'deepseek-r1', 'llama-3.3-70b-instruct'],
+            'models'    => ['inclusionai/ling-3.0-flash-vl:free', 'qwen', 'deepseek-r1', 'llama-3.3-70b-instruct'],
             'is_custom' => true,
         ],
     ];

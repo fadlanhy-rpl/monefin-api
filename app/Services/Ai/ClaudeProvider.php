@@ -41,7 +41,7 @@ class ClaudeProvider implements AiProvider
             return 'Tidak ada pesan yang valid untuk dikirim ke Claude.';
         }
 
-        $verifySSL = (bool) config('services.ai.verify_ssl', true);
+        $verifySSL = (bool) config('services.ai.verify_ssl', false);
 
         $payload = [
             'model'       => $this->model,

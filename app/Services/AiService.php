@@ -128,6 +128,8 @@ class AiService
                 || str_contains(strtolower($response), 'error dari')
                 || str_contains(strtolower($response), 'tidak valid')
                 || str_contains(strtolower($response), 'tidak tersedia')
+                || str_contains(strtolower($response), 'tidak merespons')
+                || str_contains(strtolower($response), 'timeout')
                 || str_contains(strtolower($response), 'terjadi kesalahan')
                 || str_contains(strtolower($response), 'curl error');
 

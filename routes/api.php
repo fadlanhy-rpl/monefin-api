@@ -21,6 +21,7 @@ use App\Http\Controllers\SpendingThresholdController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TrashController;
 use App\Http\Controllers\SplitBillController;
+use App\Http\Controllers\ReceiptController;
 use App\Http\Controllers\Api\GamificationController;
 use App\Http\Controllers\SmartInsightController;
 use Illuminate\Support\Facades\Route;
@@ -80,6 +81,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Transactions
     Route::apiResource('transactions', TransactionController::class);
+
+    // Receipt Scanning (Pindai Struk)
+    Route::post('/receipts/scan',    [ReceiptController::class, 'scan']);
+    Route::post('/receipts/confirm', [ReceiptController::class, 'confirm']);
 
     // Budgets
     Route::apiResource('budgets', BudgetController::class);

@@ -36,12 +36,20 @@ class OpenAiCompatibleProvider implements AiProvider
 
     private string $baseUrl;
 
+    private string $model;
+
     public function __construct(
         private readonly string $provider,
         private readonly string $apiKey,
-        private readonly string $model,
+        string $model,
         ?string $customBaseUrl = null,
     ) {
+        // Automatically upgrade deprecated/unavailable Gemini models
+        if ($provider === 'gemini' && (in_array($model, ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']) || empty($model))) {
+            $model = 'gemini-3.6-flash';
+        }
+        $this->model = $model;
+
         if ($provider === 'custom' && !empty($customBaseUrl)) {
             $url = rtrim(trim($customBaseUrl), '/');
             if (str_ends_with($url, '/chat/completions')) {
@@ -55,49 +63,80 @@ class OpenAiCompatibleProvider implements AiProvider
 
     public function chat(array $messages, float $temperature = 0.7, int $maxTokens = 4096): string
     {
-        $verifySSL = (bool) config('services.ai.verify_ssl', true);
+        @set_time_limit(60);
+
+        $verifySSL = (bool) config('services.ai.verify_ssl', false);
+
+        $payload = [
+            'model'       => $this->model,
+            'messages'    => $messages,
+            'temperature' => $temperature,
+            'max_tokens'  => $maxTokens,
+        ];
+
+        $headers = [
+            'Authorization' => "Bearer {$this->apiKey}",
+            'Content-Type'  => 'application/json',
+            'HTTP-Referer'  => config('app.url', 'https://monefin.web.id'),
+            'X-Title'       => 'MoneFin',
+        ];
 
         try {
-            $payload = [
-                'model'       => $this->model,
-                'messages'    => $messages,
-                'temperature' => $temperature,
-                'max_tokens'  => $maxTokens,
-            ];
-
-            $response = Http::timeout(30)
+            $response = Http::timeout(15)
                 ->withOptions(['verify' => $verifySSL])
-                ->withHeaders([
-                    'Authorization' => "Bearer {$this->apiKey}",
-                    'Content-Type'  => 'application/json',
-                    'HTTP-Referer'  => config('app.url', 'https://monefin.web.id'),
-                    'X-Title'       => 'MoneFin',
-                ])
+                ->withHeaders($headers)
                 ->post("{$this->baseUrl}/chat/completions", $payload);
-
-            if ($response->failed()) {
-                $body = $response->json();
-                Log::warning('AI provider error', [
+        } catch (\Throwable $e) {
+            // Check for timeout
+            if (str_contains($e->getMessage(), 'cURL error 28') || str_contains($e->getMessage(), 'timed out')) {
+                Log::warning('AI provider timeout', [
                     'provider' => $this->provider,
-                    'status'   => $response->status(),
-                    'body'     => $response->body(),
+                    'model'    => $this->model,
                 ]);
-
-                return $this->handleError($body, $response->status());
+                return "Terjadi kesalahan: Model AI '{$this->model}' tidak merespons (timeout 15 detik). Provider OpenRouter sedang mengalami antrean padat untuk model ini atau model sedang tidak aktif. Silakan coba model lain (misal: inclusionai/ling-3.0-flash-vl:free) atau gunakan Google Gemini.";
             }
 
-            $data = $response->json();
-            $rawContent = $data['choices'][0]['message']['content']
-                ?? 'Maaf, saya tidak mendapatkan respons yang valid dari AI. Silakan coba lagi.';
-            return trim(preg_replace('/<think>.*?<\/think>/s', '', $rawContent));
-
-        } catch (\Throwable $e) {
-            Log::error('AI provider exception', [
-                'provider' => $this->provider,
-                'message'  => $e->getMessage(),
-            ]);
-            return 'Terjadi kesalahan saat menghubungi AI (' . $e->getMessage() . '). Periksa Base URL dan koneksi.';
+            // Graceful fallback: If SSL certificate verification fails (cURL error 60), retry without SSL verification
+            if (str_contains($e->getMessage(), 'cURL error 60') || str_contains($e->getMessage(), 'SSL certificate')) {
+                try {
+                    $response = Http::timeout(15)
+                        ->withOptions(['verify' => false])
+                        ->withHeaders($headers)
+                        ->post("{$this->baseUrl}/chat/completions", $payload);
+                } catch (\Throwable $retryEx) {
+                    if (str_contains($retryEx->getMessage(), 'cURL error 28') || str_contains($retryEx->getMessage(), 'timed out')) {
+                        return "Model AI '{$this->model}' tidak merespons (timeout 15 detik). Antrean provider sedang padat. Silakan coba model lain.";
+                    }
+                    Log::error('AI provider retry exception', [
+                        'provider' => $this->provider,
+                        'message'  => $retryEx->getMessage(),
+                    ]);
+                    return 'Terjadi kesalahan saat menghubungi AI (' . $retryEx->getMessage() . '). Periksa Base URL dan koneksi.';
+                }
+            } else {
+                Log::error('AI provider exception', [
+                    'provider' => $this->provider,
+                    'message'  => $e->getMessage(),
+                ]);
+                return 'Terjadi kesalahan saat menghubungi AI (' . $e->getMessage() . '). Periksa Base URL dan koneksi.';
+            }
         }
+
+        if ($response->failed()) {
+            $body = $response->json();
+            Log::warning('AI provider error', [
+                'provider' => $this->provider,
+                'status'   => $response->status(),
+                'body'     => $response->body(),
+            ]);
+
+            return $this->handleError($body, $response->status());
+        }
+
+        $data = $response->json();
+        $rawContent = $data['choices'][0]['message']['content']
+            ?? 'Maaf, saya tidak mendapatkan respons yang valid dari AI. Silakan coba lagi.';
+        return trim(preg_replace('/<think>.*?<\/think>/s', '', $rawContent));
     }
 
     public function getProviderName(): string
@@ -147,17 +186,17 @@ class OpenAiCompatibleProvider implements AiProvider
 
     public function streamChat(array $messages, callable $onChunk, float $temperature = 0.7): void
     {
-        $verifySSL = (bool) config('services.ai.verify_ssl', true);
+        $verifySSL = (bool) config('services.ai.verify_ssl', false);
 
-        try {
+        $postStream = function (bool $verify) use ($messages, $temperature) {
             $client = new \GuzzleHttp\Client([
                 'timeout'      => 180.0,
                 'read_timeout' => 120.0,
-                'verify'       => $verifySSL,
+                'verify'       => $verify,
                 'http_errors'  => false,
             ]);
 
-            $response = $client->post("{$this->baseUrl}/chat/completions", [
+            return $client->post("{$this->baseUrl}/chat/completions", [
                 'headers' => [
                     'Authorization' => "Bearer {$this->apiKey}",
                     'Content-Type'  => 'application/json',
@@ -174,6 +213,18 @@ class OpenAiCompatibleProvider implements AiProvider
                 ],
                 'stream' => true,
             ]);
+        };
+
+        try {
+            try {
+                $response = $postStream($verifySSL);
+            } catch (\Throwable $e) {
+                if (str_contains($e->getMessage(), 'cURL error 60') || str_contains($e->getMessage(), 'SSL certificate')) {
+                    $response = $postStream(false);
+                } else {
+                    throw $e;
+                }
+            }
 
             $statusCode = $response->getStatusCode();
             if ($statusCode >= 400) {
