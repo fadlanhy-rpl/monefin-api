@@ -8,6 +8,7 @@ use App\Services\FinancialHealthService;
 use App\Services\Ai\AiProviderFactory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
@@ -188,11 +189,20 @@ class AiController extends Controller
     /**
      * GET /api/ai/insights
      * Purely deterministic — no AI required.
+     * Di-cache 3 menit per user + bahasa. Di-invalidate otomatis saat transaksi baru.
      */
     public function insights(Request $request): JsonResponse
     {
-        $lang   = $request->header('Accept-Language') ?? ($request->user()?->preferences['language'] ?? 'id');
-        $result = $this->healthService->insights($request->user(), $lang);
+        $user = $request->user();
+        $lang = $request->header('Accept-Language') ?? ($user?->preferences['language'] ?? 'id');
+        $normLang = str_starts_with(strtolower($lang), 'en') ? 'en' : 'id';
+
+        $cacheKey = "ai_insights:{$user->id}:{$normLang}";
+
+        $result = Cache::remember($cacheKey, 180, function () use ($user, $normLang) {
+            return $this->healthService->insights($user, $normLang);
+        });
+
         return response()->json(['data' => $result]);
     }
 

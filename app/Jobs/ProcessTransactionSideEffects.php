@@ -240,6 +240,10 @@ class ProcessTransactionSideEffects implements ShouldQueue
             Cache::forget("dashboard_summary:{$this->user->id}:{$range}");
         }
 
+        // AI insights cache
+        Cache::forget("ai_insights:{$this->user->id}:id");
+        Cache::forget("ai_insights:{$this->user->id}:en");
+
         // AI context cache — agar pesan chat AI berikutnya pakai data finansial terbaru
         Cache::forget("ai_context:{$this->user->id}");
     }
