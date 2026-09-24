@@ -47,8 +47,8 @@ class TransactionResource extends JsonResource
      *
      * Handles:
      * 1. Full URL (e.g. from S3/CDN) → return as-is (strip index.php if present)
-     * 2. Path with "uploads/" prefix → use uploads disk URL
-     * 3. Other relative paths → use url() helper
+     * 2. Path with "uploads/" prefix  → use uploads disk URL
+     * 3. Other relative paths         → use url() helper
      */
     private function resolveReceiptImageUrl(string $path): string
     {
