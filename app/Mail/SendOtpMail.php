@@ -4,8 +4,10 @@ namespace App\Mail;
 
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Mail\Mailables\Headers;
 use Illuminate\Queue\SerializesModels;
 
 class SendOtpMail extends Mailable
@@ -27,21 +29,43 @@ class SendOtpMail extends Mailable
 
     public function envelope(): Envelope
     {
-        $appName = config('app.name');
+        $appName = config('app.name', 'MoneFin');
 
         $subject = match($this->type) {
-            'verification' => "Verifikasi Email Anda – {$appName}",
-            'reset'        => "Reset Password – {$appName}",
-            '2fa'          => "Kode Keamanan Two-Factor – {$appName}",
-            default        => "Kode OTP – {$appName}",
+            'verification' => "Kode Verifikasi Pendaftaran – {$appName}",
+            'reset'        => "Kode Keamanan Reset Kata Sandi – {$appName}",
+            '2fa'          => "Kode Keamanan Verifikasi 2 Langkah – {$appName}",
+            default        => "Kode Otentikasi Keamanan – {$appName}",
         };
 
-        return new Envelope(subject: $subject);
+        $fromAddress = config('mail.from.address', 'monefin.techapp@gmail.com');
+        $fromName    = config('mail.from.name', 'MoneFin');
+
+        return new Envelope(
+            subject: $subject,
+            replyTo: [
+                new Address($fromAddress, $fromName),
+            ],
+        );
+    }
+
+    public function headers(): Headers
+    {
+        return new Headers(
+            text: [
+                'Auto-Submitted'           => 'auto-generated',
+                'X-Auto-Response-Suppress' => 'All',
+                'Precedence'               => 'bulk',
+            ],
+        );
     }
 
     public function content(): Content
     {
-        return new Content(view: 'emails.otp');
+        return new Content(
+            view: 'emails.otp',
+            text: 'emails.otp_plain'
+        );
     }
 
     public function attachments(): array
