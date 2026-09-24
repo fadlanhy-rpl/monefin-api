@@ -377,13 +377,23 @@ class AiService
         $last30     = $now->copy()->subDays(30)->toDateString();
         $currentDate = $now->format('d F Y');
 
-        $totalBalance     = $user->accounts()->sum('balance');
-        $incomeThisMonth  = Transaction::where('user_id', $user->id)->where('type', 'income')->whereBetween('transaction_date', [$startMonth, $endMonth])->sum('amount');
-        $expenseThisMonth = Transaction::where('user_id', $user->id)->where('type', 'expense')->whereBetween('transaction_date', [$startMonth, $endMonth])->sum('amount');
-        $expenseThisWeek  = Transaction::where('user_id', $user->id)->where('type', 'expense')->whereBetween('transaction_date', [$startWeek, $endWeek])->sum('amount');
+        $totalBalance = (float) $user->accounts()->sum('balance');
+
+        // Gabung income & expense bulan ini menjadi 1 query
+        $incomeExpenseRow = Transaction::where('user_id', $user->id)
+            ->whereBetween('transaction_date', [$startMonth, $endMonth])
+            ->selectRaw("
+                COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as total_income,
+                COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as total_expense
+            ")
+            ->first();
+
+        $incomeThisMonth  = (float) ($incomeExpenseRow->total_income  ?? 0);
+        $expenseThisMonth = (float) ($incomeExpenseRow->total_expense ?? 0);
+        $expenseThisWeek  = (float) Transaction::where('user_id', $user->id)->where('type', 'expense')->whereBetween('transaction_date', [$startWeek, $endWeek])->sum('amount');
 
         $lastWeek        = $now->copy()->subWeek();
-        $expenseLastWeek = Transaction::where('user_id', $user->id)->where('type', 'expense')
+        $expenseLastWeek = (float) Transaction::where('user_id', $user->id)->where('type', 'expense')
             ->whereBetween('transaction_date', [
                 $lastWeek->copy()->startOfWeek()->toDateString(),
                 $lastWeek->copy()->endOfWeek()->toDateString(),
@@ -401,26 +411,36 @@ class AiService
             ->map(fn($r) => ['category' => $r->category?->name ?? 'Lain-lain', 'amount' => (float) $r->total])
             ->toArray();
 
-        $budgets = Budget::where('user_id', $user->id)
+        // Batch query anggaran (eliminasi N+1 loop)
+        $rawBudgets = Budget::where('user_id', $user->id)
             ->where('month', $now->month)
             ->where('year', $now->year)
             ->with('category:id,name')
-            ->get()
-            ->map(function ($b) use ($user, $now) {
-                $spent = Transaction::where('user_id', $user->id)
-                    ->where('category_id', $b->category_id)
-                    ->where('type', 'expense')
-                    ->whereMonth('transaction_date', $now->month)
-                    ->whereYear('transaction_date', $now->year)
-                    ->sum('amount');
-                return [
-                    'category' => $b->category?->name,
-                    'limit'    => (float) $b->limit_amount,
-                    'spent'    => (float) $spent,
-                    'percent'  => $b->limit_amount > 0 ? round(($spent / $b->limit_amount) * 100) : 0,
-                ];
-            })
-            ->toArray();
+            ->get();
+
+        $categoryIds = $rawBudgets->pluck('category_id')->filter()->unique()->toArray();
+        $spentMap = [];
+        if (!empty($categoryIds)) {
+            $spentMap = Transaction::where('user_id', $user->id)
+                ->whereIn('category_id', $categoryIds)
+                ->where('type', 'expense')
+                ->whereMonth('transaction_date', $now->month)
+                ->whereYear('transaction_date', $now->year)
+                ->groupBy('category_id')
+                ->selectRaw('category_id, SUM(amount) as total_spent')
+                ->pluck('total_spent', 'category_id')
+                ->toArray();
+        }
+
+        $budgets = $rawBudgets->map(function ($b) use ($spentMap) {
+            $spent = (float) ($spentMap[$b->category_id] ?? 0);
+            return [
+                'category' => $b->category?->name ?? 'Lain-lain',
+                'limit'    => (float) $b->limit_amount,
+                'spent'    => $spent,
+                'percent'  => $b->limit_amount > 0 ? round(($spent / $b->limit_amount) * 100) : 0,
+            ];
+        })->toArray();
 
         $goals = $user->goals()
             ->limit(3)

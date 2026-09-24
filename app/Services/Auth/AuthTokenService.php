@@ -55,18 +55,35 @@ class AuthTokenService
             'login_time'  => now()->translatedFormat('d M Y, H:i'),
         ], now()->addDays(2));
 
-        // Kirim email peringatan login baru ke user
-        try {
-            Mail::to($user->email)->send(new NewLoginAlertMail(
-                $user->name,
-                $user->email,
-                $deviceName,
-                $request->ip() ?: 'IP tidak tersimpan',
-                now()->translatedFormat('d M Y, H:i'),
-                $actionToken
-            ));
-        } catch (\Exception $e) {
-            Log::error('Mail Error (New Login Alert): ' . $e->getMessage());
+        // Kirim email peringatan login baru ke user secara non-blocking
+        // Hanya kirim jika device/IP ini belum pernah menerima alert dalam 24 jam terakhir
+        $alertKey = "login_alert_sent:{$user->id}:" . md5($deviceName . ($request->ip() ?: ''));
+        if (!Cache::has($alertKey)) {
+            Cache::put($alertKey, true, now()->addDay());
+
+            $sendMailCallback = function () use ($user, $deviceName, $request, $actionToken) {
+                if (function_exists('fastcgi_finish_request')) {
+                    @fastcgi_finish_request(); // Lepaskan koneksi HTTP ke browser seketika
+                }
+                try {
+                    Mail::to($user->email)->send(new NewLoginAlertMail(
+                        $user->name,
+                        $user->email,
+                        $deviceName,
+                        $request->ip() ?: 'IP tidak tersimpan',
+                        now()->translatedFormat('d M Y, H:i'),
+                        $actionToken
+                    ));
+                } catch (\Throwable $e) {
+                    Log::error('Mail Error (New Login Alert): ' . $e->getMessage());
+                }
+            };
+
+            if (app()->bound('events')) {
+                app()->terminating($sendMailCallback);
+            } else {
+                register_shutdown_function($sendMailCallback);
+            }
         }
 
         return $tokenResult->plainTextToken;
