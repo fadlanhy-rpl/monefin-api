@@ -9,8 +9,8 @@ namespace App\Services\Ai;
 class AiProviderFactory
 {
     /**
-     * Available providers and their default models.
-     * Used for validation and UI population.
+     * Available providers and their recommended default models.
+     * Note: Users are completely free to specify ANY model identifier supported by the provider.
      */
     public const PROVIDERS = [
         'openai' => [
@@ -19,7 +19,7 @@ class AiProviderFactory
         ],
         'gemini' => [
             'label'  => 'Google Gemini',
-            'models' => ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+            'models' => ['gemini-flash-latest', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.8-flash'],
         ],
         'deepseek' => [
             'label'  => 'DeepSeek',
@@ -33,22 +33,31 @@ class AiProviderFactory
             'label'  => 'Anthropic Claude',
             'models' => ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5'],
         ],
+        'grok' => [
+            'label'  => 'xAI (Grok)',
+            'models' => ['grok-2-latest', 'grok-2-vision-1212', 'grok-beta'],
+        ],
         'groq' => [
-            'label'  => 'Groq',
+            'label'  => 'Groq (LPU Cloud)',
             'models' => ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+        ],
+        'custom' => [
+            'label'     => 'Custom (OpenAI-Compatible)',
+            'models'    => ['inclusionai/ling-3.0-flash-vl:free', 'qwen', 'deepseek-r1', 'llama-3.3-70b-instruct'],
+            'is_custom' => true,
         ],
     ];
 
     /**
      * Create a provider instance from user configuration.
      */
-    public static function make(string $provider, string $apiKey, string $model): AiProvider
+    public static function make(string $provider, string $apiKey, string $model, ?string $baseUrl = null): AiProvider
     {
         if ($provider === 'claude') {
             return new ClaudeProvider($apiKey, $model);
         }
 
-        return new OpenAiCompatibleProvider($provider, $apiKey, $model);
+        return new OpenAiCompatibleProvider($provider, $apiKey, $model, $baseUrl);
     }
 
     /**
@@ -64,6 +73,6 @@ class AiProviderFactory
      */
     public static function defaultModel(string $provider): string
     {
-        return self::PROVIDERS[$provider]['models'][0] ?? '';
+        return self::PROVIDERS[$provider]['models'][0] ?? 'default';
     }
 }

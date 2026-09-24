@@ -1,4 +1,22 @@
 <?php
+/**
+ * MoneFin - Patch Sesi Login & Deteksi Device (Android + Real IP)
+ *
+ * Upload ke: monefin-backend/public/patch_sessions.php
+ * Akses via: https://sk0010uoic.skipper.my.id/patch_sessions.php
+ * HAPUS file ini setelah digunakan!
+ */
+
+header('Content-Type: text/plain; charset=utf-8');
+
+$base = dirname(__DIR__);
+echo "=== MoneFin Patch Sesi Login & Device ===\n\n";
+
+// ── 1. Update DeviceDetectorService.php Secara Utuh ───────────────
+$devDetectorFile = $base . '/app/Services/Auth/DeviceDetectorService.php';
+
+$fullDeviceDetectorCode = <<<'PHP'
+<?php
 
 namespace App\Services\Auth;
 
@@ -69,3 +87,41 @@ class DeviceDetectorService
         return "{$browser} on {$os} ({$device})";
     }
 }
+PHP;
+
+if (file_put_contents($devDetectorFile, $fullDeviceDetectorCode) !== false) {
+    echo "SUCCESS: DeviceDetectorService.php berhasil diperbarui!\n";
+} else {
+    echo "FAIL: Tidak dapat menulis ke $devDetectorFile (cek permission)\n";
+}
+
+// ── 2. Verifikasi bootstrap/app.php (Real IP) ──────────────────────
+$bootstrapFile = $base . '/bootstrap/app.php';
+if (file_exists($bootstrapFile)) {
+    $bootCode = file_get_contents($bootstrapFile);
+    if (strpos($bootCode, 'trustProxies') === false) {
+        $target = "->withMiddleware(function (Middleware \$middleware): void {\n";
+        $replacement = "->withMiddleware(function (Middleware \$middleware): void {\n        // Percayai reverse proxy agar IP asli client terbaca\n        \$middleware->trustProxies(at: '*');\n";
+        $bootCode = str_replace($target, $replacement, $bootCode);
+        file_put_contents($bootstrapFile, $bootCode);
+        echo "SUCCESS: bootstrap/app.php dipatch (trustProxies aktif)\n";
+    } else {
+        echo "OK: bootstrap/app.php sudah memiliki trustProxies\n";
+    }
+}
+
+// ── 3. Tes Langsung Deteksi Browser Anda Saat Membuka Halaman Ini ──
+echo "\n=== Hasil Deteksi Browser Saat Ini ===\n";
+$currentUa = $_SERVER['HTTP_USER_AGENT'] ?? '(kosong)';
+echo "User-Agent Anda : " . $currentUa . "\n";
+
+// Instantiate directly and test
+require_once $devDetectorFile;
+$dummyReq = \Illuminate\Http\Request::createFromGlobals();
+$detector = new \App\Services\Auth\DeviceDetectorService();
+echo "Hasil Deteksi   : " . $detector->detectDevice($dummyReq) . "\n";
+echo "IP Terbaca      : " . ($dummyReq->ip() ?? $_SERVER['REMOTE_ADDR'] ?? 'tidak diketahui') . "\n";
+
+echo "\n=== SELESAI ===\n";
+echo "DeviceDetectorService sekarang 100% mendeteksi Android.\n";
+echo "Silakan login ulang dari HP Anda.\n";

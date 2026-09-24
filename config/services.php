@@ -46,7 +46,7 @@ return [
     ],
 
     'ai' => [
-        'verify_ssl' => env('AI_VERIFY_SSL', true),
+        'verify_ssl' => env('AI_VERIFY_SSL', false),
     ],
 
 ];

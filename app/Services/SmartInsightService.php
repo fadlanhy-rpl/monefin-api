@@ -7,13 +7,6 @@ use App\Services\Insights\DeterministicRuleEngine;
 use App\Services\Insights\InsightContextBuilder;
 use Illuminate\Support\Facades\Cache;
 
-/**
- * Dual-mode Smart Insight Service with full localization ('en' and 'id').
- * - AI enabled  → call user's configured AI provider for contextual insight
- * - AI disabled → return deterministic rule-based insight
- *
- * Supported pages: dashboard | categories | budgets | accounts | goals
- */
 class SmartInsightService
 {
     public function __construct(
@@ -22,9 +15,6 @@ class SmartInsightService
         private readonly DeterministicRuleEngine $ruleEngine
     ) {}
 
-    /**
-     * Invalidate all cached smart insights for a user
-     */
     public static function invalidateUserCache(User $user): void
     {
         foreach (['dashboard', 'categories', 'budgets', 'accounts', 'goals'] as $p) {
@@ -49,20 +39,33 @@ class SmartInsightService
                 if ($result !== null) {
                     return $result;
                 }
-                // AI failed — fall through to deterministic
             }
 
             return $this->ruleEngine->generate($page, $context, $prefs, $langNormalized);
         });
     }
 
-    // ─── AI Mode ─────────────────────────────────────────────────────────────
-
     private function getAiInsight(User $user, string $page, array $ctx, array $prefs, string $lang): ?array
     {
+        // Fast-path Guard: Jika data halaman belum ada (misal belum ada budget),
+        // langsung fallback ke MoneFin Engine secara instan tanpa membuang waktu panggil remote AI.
+        if ($page === 'budgets' && empty($ctx['budgets'])) {
+            return null;
+        }
+        if ($page === 'accounts' && empty($ctx['accounts'])) {
+            return null;
+        }
+        if ($page === 'goals' && empty($ctx['goals'])) {
+            return null;
+        }
+
         $aiConfig = $prefs['ai_config'] ?? [];
         $provider = $aiConfig['provider'] ?? '';
         $model    = $aiConfig['model']    ?? '';
+
+        if (empty($provider)) {
+            return null;
+        }
 
         $contextText = $this->contextBuilder->contextToText($ctx, $page);
         $pageLabel   = $this->contextBuilder->pageLabel($page, $lang);
@@ -75,7 +78,7 @@ class SmartInsightService
             $raw = $this->ai->chat($user, $prompt, []);
 
             if ($this->ai->isQuotaError($raw)) {
-                return null; // Fall back to deterministic
+                return null;
             }
 
             $clean  = trim(preg_replace('/```(?:json)?|```/', '', $raw));
@@ -89,7 +92,7 @@ class SmartInsightService
                 ]);
             }
         } catch (\Throwable $e) {
-            // AI error — fall through
+            // AI error — fall through to deterministic
         }
 
         return null;

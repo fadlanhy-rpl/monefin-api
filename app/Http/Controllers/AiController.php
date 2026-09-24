@@ -88,28 +88,60 @@ class AiController extends Controller
         ]);
 
         return response()->stream(function () use ($user, $validated) {
-            while (ob_get_level() > 0) {
-                ob_end_flush();
+            @set_time_limit(300);
+            @ini_set('max_execution_time', '300');
+            if (function_exists('apache_setenv')) {
+                @apache_setenv('no-gzip', '1');
             }
+            @ini_set('zlib.output_compression', 'Off');
+            @ini_set('output_buffering', 'Off');
+            @ini_set('implicit_flush', '1');
+            @ob_implicit_flush(true);
 
-            $this->ai->streamChat(
-                $user,
-                $validated['message'],
-                $validated['history'] ?? [],
-                function (string $token) {
-                    echo "data: " . json_encode(['text' => $token]) . "\n\n";
-                    if (ob_get_level() > 0) {
-                        ob_flush();
+            try {
+                // Safely clean non-zlib buffers
+                while (ob_get_level() > 0) {
+                    $status = ob_get_status();
+                    if (!empty($status['name']) && (str_contains($status['name'], 'zlib') || str_contains($status['name'], 'compress'))) {
+                        break;
                     }
-                    flush();
+                    @ob_end_clean();
                 }
-            );
 
-            echo "data: [DONE]\n\n";
-            if (ob_get_level() > 0) {
-                ob_flush();
+                // Send 2KB initial SSE comment padding to immediately disable LiteSpeed / reverse-proxy buffering
+                echo ": " . str_repeat(" ", 2048) . "\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
+
+                $this->ai->streamChat(
+                    $user,
+                    $validated['message'],
+                    $validated['history'] ?? [],
+                    function (string $token) {
+                        echo "data: " . json_encode(['text' => $token]) . "\n\n";
+                        if (ob_get_level() > 0) {
+                            @ob_flush();
+                        }
+                        @flush();
+                    }
+                );
+
+                echo "data: [DONE]\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::error('AI Stream Error: ' . $e->getMessage());
+                echo "data: " . json_encode(['text' => "Maaf, terjadi gangguan pada AI Chatbot: " . $e->getMessage()]) . "\n\n";
+                echo "data: [DONE]\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                @flush();
             }
-            flush();
         }, 200, [
             'Content-Type'      => 'text/event-stream',
             'Cache-Control'     => 'no-cache, no-transform',
@@ -155,7 +187,7 @@ class AiController extends Controller
 
     /**
      * GET /api/ai/insights
-     * Now purely deterministic — no AI required.
+     * Purely deterministic — no AI required.
      */
     public function insights(Request $request): JsonResponse
     {
@@ -165,27 +197,38 @@ class AiController extends Controller
     }
 
     /**
-     * GET /api/ai/test-connection
-     * Test the user's configured AI provider with a minimal message.
+     * GET / POST /api/ai/test-connection
+     * Test the AI provider with a minimal message. Accepts credentials in request or falls back to saved preferences.
      */
     public function testConnection(Request $request): JsonResponse
     {
+        @set_time_limit(60);
+
         $user  = $request->user();
         $prefs = $user->preferences ?? [];
 
-        if (empty($prefs['ai_config']['provider'] ?? '')) {
+        $provider = $request->input('provider') ?: ($prefs['ai_config']['provider'] ?? '');
+        $model    = $request->input('model')    ?: ($prefs['ai_config']['model'] ?? '');
+        $baseUrl  = $request->input('base_url') ?: ($prefs['ai_config']['base_url'] ?? null);
+        $rawKey   = $request->input('api_key');
+
+        if (empty($rawKey)) {
+            $rawKey = $this->ai->getDecryptedApiKey($user);
+        }
+
+        if (empty($provider) || empty($rawKey)) {
             return response()->json([
                 'ok'      => false,
-                'message' => 'Belum ada provider yang dikonfigurasi. Pilih provider dan masukkan API key terlebih dahulu.',
+                'message' => 'Pilih provider dan masukkan API key terlebih dahulu.',
             ], 422);
         }
 
-        $result = $this->ai->testConnection($user);
+        $result = $this->ai->testConnectionDirect($provider, $rawKey, $model, $baseUrl);
 
         return response()->json([
             'ok'       => $result['ok'],
-            'provider' => $result['provider'] ?? null,
-            'model'    => $result['model']    ?? null,
+            'provider' => $result['provider'] ?? $provider,
+            'model'    => $result['model']    ?? $model,
             'message'  => $result['message'],
         ], $result['ok'] ? 200 : 422);
     }
@@ -255,10 +298,12 @@ class AiController extends Controller
     public function saveConfig(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'ai_enabled' => ['required', 'boolean'],
-            'provider'   => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
-            'model'      => ['nullable', 'string', 'max:100'],
-            'api_key'    => ['nullable', 'string', 'max:500'],
+            'ai_enabled'   => ['required', 'boolean'],
+            'provider'     => ['nullable', 'string', 'in:' . implode(',', array_keys(AiProviderFactory::PROVIDERS))],
+            'custom_name'  => ['nullable', 'string', 'max:100'],
+            'model'        => ['nullable', 'string', 'max:255'],
+            'api_key'      => ['nullable', 'string', 'max:500'],
+            'base_url'     => ['nullable', 'string', 'max:500'],
         ]);
 
         $user  = $request->user();
@@ -270,8 +315,10 @@ class AiController extends Controller
             $existing = $prefs['ai_config'] ?? [];
 
             $prefs['ai_config'] = [
-                'provider' => $validated['provider'],
-                'model'    => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
+                'provider'    => $validated['provider'],
+                'custom_name' => !empty($validated['custom_name']) ? trim($validated['custom_name']) : ($existing['custom_name'] ?? null),
+                'model'       => $validated['model'] ?? AiProviderFactory::defaultModel($validated['provider']),
+                'base_url'    => !empty($validated['base_url']) ? trim($validated['base_url']) : ($existing['base_url'] ?? null),
                 // Preserve existing encrypted key if no new key provided
                 'api_key_encrypted' => !empty($validated['api_key'])
                     ? Crypt::encryptString($validated['api_key'])
@@ -289,8 +336,10 @@ class AiController extends Controller
             'message'    => 'Konfigurasi AI berhasil disimpan.',
             'ai_enabled' => $prefs['ai_enabled'],
             'ai_config'  => [
-                'provider'       => $prefs['ai_config']['provider']      ?? null,
-                'model'          => $prefs['ai_config']['model']         ?? null,
+                'provider'       => $prefs['ai_config']['provider']       ?? null,
+                'custom_name'    => $prefs['ai_config']['custom_name']    ?? null,
+                'model'          => $prefs['ai_config']['model']          ?? null,
+                'base_url'       => $prefs['ai_config']['base_url']       ?? null,
                 'api_key_masked' => $prefs['ai_config']['api_key_masked'] ?? null,
             ],
         ]);

@@ -8,6 +8,7 @@ use App\Models\Goal;
 use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class SearchController extends Controller
 {
@@ -37,12 +38,13 @@ class SearchController extends Controller
         }
 
         $like = "%{$query}%";
+        $operator = DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
 
         // 1. Transactions — cari di deskripsi atau nama kategori
         $transactions = Transaction::where('user_id', $user->id)
-            ->where(function ($q) use ($like) {
-                $q->where('description', 'ilike', $like)
-                  ->orWhereHas('category', fn($c) => $c->where('name', 'ilike', $like));
+            ->where(function ($q) use ($like, $operator) {
+                $q->where('description', $operator, $like)
+                  ->orWhereHas('category', fn($c) => $c->where('name', $operator, $like));
             })
             ->with('category:id,name,icon')
             ->select('id', 'description', 'amount', 'type', 'transaction_date', 'category_id')
@@ -60,7 +62,7 @@ class SearchController extends Controller
             ]);
 
         // 2. Categories — cari di nama kategori milik user / default
-        $categories = Category::where('name', 'ilike', $like)
+        $categories = Category::where('name', $operator, $like)
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id)->orWhereNull('user_id');
             })
@@ -70,16 +72,16 @@ class SearchController extends Controller
 
         // 3. Accounts — cari nama akun milik user
         $accounts = Account::where('user_id', $user->id)
-            ->where('name', 'ilike', $like)
+            ->where('name', $operator, $like)
             ->select('id', 'name', 'balance', 'type')
             ->limit(5)
             ->get();
 
         // 4. Goals — cari nama/deskripsi goal milik user
         $goals = Goal::where('user_id', $user->id)
-            ->where(function ($q) use ($like) {
-                $q->where('name', 'ilike', $like)
-                  ->orWhere('description', 'ilike', $like);
+            ->where(function ($q) use ($like, $operator) {
+                $q->where('name', $operator, $like)
+                  ->orWhere('description', $operator, $like);
             })
             ->select('id', 'name', 'target_amount', 'current_amount', 'deadline')
             ->limit(5)

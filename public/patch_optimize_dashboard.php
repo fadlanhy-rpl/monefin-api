@@ -1,4 +1,27 @@
 <?php
+/**
+ * MoneFin — Patch: Optimize Dashboard Controller Queries & Cache
+ *
+ * Update:
+ * - 1 income/expense aggregation query instead of 2 separate queries
+ * - 1 weekly trend query using UNION ALL instead of 2 separate queries
+ * - 1 monthly trend query using UNION ALL instead of 2 separate queries
+ * - Cache cleanup
+ *
+ * Upload to : monefin-backend/public/patch_optimize_dashboard.php
+ * Access via: https://sk0010uoic.skipper.my.id/patch_optimize_dashboard.php
+ * DELETE this file after use!
+ */
+
+header('Content-Type: text/plain; charset=utf-8');
+
+$base = dirname(__DIR__);
+echo "=== MoneFin Patch: Optimize Dashboard Controller Queries ===\n\n";
+
+$targetFile = $base . '/app/Http/Controllers/DashboardController.php';
+
+$newContent = <<<'PHP'
+<?php
 
 namespace App\Http\Controllers;
 
@@ -279,4 +302,81 @@ class DashboardController extends Controller
             'recent_transactions'      => $recentTransactions,
         ];
     }
+}
+PHP;
+
+// ── Write file ──────────────────────────────────────────────────────────────
+echo "Target: {$targetFile}\n";
+
+if (!file_exists($targetFile)) {
+    echo "❌ ERROR: File tidak ditemukan: {$targetFile}\n";
+    exit(1);
+}
+
+// Backup file lama
+$backupFile = $targetFile . '.bak_' . date('YmdHis');
+if (!copy($targetFile, $backupFile)) {
+    echo "⚠ WARNING: Gagal membuat backup, melanjutkan...\n";
+} else {
+    echo "✅ Backup dibuat: {$backupFile}\n";
+}
+
+// Tulis file baru
+$written = file_put_contents($targetFile, $newContent);
+if ($written === false) {
+    echo "❌ ERROR: Gagal menulis file. Periksa permission folder.\n";
+    exit(1);
+}
+
+echo "✅ DashboardController.php berhasil diperbarui ({$written} bytes ditulis)\n\n";
+
+// ── Clear Laravel cache ──────────────────────────────────────────────────────
+echo "── Membersihkan cache Laravel... ──\n";
+
+$configCache = $base . '/bootstrap/cache/config.php';
+if (file_exists($configCache)) {
+    unlink($configCache);
+    echo "✅ Config cache dihapus\n";
+} else {
+    echo "ℹ Config cache tidak ada (sudah bersih)\n";
+}
+
+$servicesCache = $base . '/bootstrap/cache/services.php';
+if (file_exists($servicesCache)) {
+    unlink($servicesCache);
+    echo "✅ Services cache dihapus\n";
+}
+
+$packagesCache = $base . '/bootstrap/cache/packages.php';
+if (file_exists($packagesCache)) {
+    unlink($packagesCache);
+    echo "✅ Packages cache dihapus\n";
+}
+
+$cacheDir = $base . '/storage/framework/cache/data';
+if (is_dir($cacheDir)) {
+    $cacheFiles = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($cacheDir, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    $cleared = 0;
+    foreach ($cacheFiles as $f) {
+        if ($f->isFile()) {
+            unlink($f->getPathname());
+            $cleared++;
+        }
+    }
+    echo "✅ App cache dihapus ({$cleared} files)\n";
+}
+
+// ── Verify ───────────────────────────────────────────────────────────────────
+echo "\n── Verifikasi ──\n";
+$content = file_get_contents($targetFile);
+if (str_contains($content, "'this' as week_label") && str_contains($content, "'this' as year_label")) {
+    echo "✅ Optimasi query dashboard berhasil diterapkan!\n";
+    echo "\n=== SELESAI ===\n";
+    echo "Backend SkipperHost sudah teroptimasi.\n";
+    echo "Silakan HAPUS file patch_optimize_dashboard.php ini setelah selesai!\n";
+} else {
+    echo "❌ Verifikasi GAGAL — konten file tidak sesuai ekspektasi.\n";
 }

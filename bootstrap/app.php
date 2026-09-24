@@ -13,6 +13,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Percayai semua reverse proxy (Cloudflare & Nginx SkipperHost) agar IP asli client terbaca
+        $middleware->trustProxies(at: '*');
+
         // Jangan redirect guest ke route('login') yang tidak ada pada API stateless
         $middleware->redirectGuestsTo(fn (Request $request) => null);
 

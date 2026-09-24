@@ -50,9 +50,11 @@ class ProfileController extends Controller
             ];
 
             if ($request->has('preferences') && !is_null($request->preferences)) {
-                $prefs = json_decode($request->preferences, true);
-                if (json_last_error() === JSON_ERROR_NONE) {
-                    $data['preferences'] = $prefs;
+                $incomingPrefs = json_decode($request->preferences, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($incomingPrefs)) {
+                    // Deeply preserve existing user preferences (such as ai_enabled and ai_config)
+                    $currentPrefs = $user->preferences ?? [];
+                    $data['preferences'] = array_merge($currentPrefs, $incomingPrefs);
                 }
             }
 
@@ -64,11 +66,17 @@ class ProfileController extends Controller
                 }
 
                 // Hapus foto lama
-                if ($user->photo && Storage::disk('public')->exists($user->photo)) {
-                    Storage::disk('public')->delete($user->photo);
+                if ($user->photo) {
+                    // Support both old (profiles/...) and new (uploads/profiles/...) format
+                    $oldPath = str_replace('uploads/', '', $user->photo);
+                    Storage::disk('uploads')->exists('profiles/' . basename($user->photo))
+                        && Storage::disk('uploads')->delete('profiles/' . basename($user->photo));
                 }
 
-                $data['photo'] = $file->store('profiles', 'public');
+                // Simpan ke public/uploads/profiles/ — dapat diakses langsung nginx
+                $filename = $file->hashName();
+                $file->move(public_path('uploads/profiles'), $filename);
+                $data['photo'] = 'uploads/profiles/' . $filename;
             }
 
             $user->update($data);

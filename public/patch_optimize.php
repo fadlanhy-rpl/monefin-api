@@ -1,4 +1,22 @@
 <?php
+/**
+ * MoneFin - Performance & High Concurrency Optimizer Patcher
+ *
+ * Upload ke: monefin-backend/public/patch_optimize.php
+ * Akses via: https://sk0010uoic.skipper.my.id/patch_optimize.php
+ * HAPUS file ini setelah digunakan!
+ */
+
+header('Content-Type: text/plain; charset=utf-8');
+
+$base = dirname(__DIR__);
+echo "=== MoneFin High-Concurrency Performance Patcher ===\n\n";
+
+// ── 1. Update DashboardController.php dengan Debounced Quest Action ───
+$ctrlFile = $base . '/app/Http/Controllers/DashboardController.php';
+
+$fullControllerCode = <<<'PHP'
+<?php
 
 namespace App\Http\Controllers;
 
@@ -87,17 +105,16 @@ class DashboardController extends Controller
         // 1. Total saldo semua akun aktif (tidak soft-deleted)
         $totalBalance = $user->accounts()->sum('balance');
 
-        // 2. Total income & expense pada rentang tanggal terpilih (1 query, bukan 2)
-        $incomeExpenseRow = Transaction::where('user_id', $user->id)
+        // 2. Total income & expense pada rentang tanggal terpilih
+        $totalIncomeThisMonth = Transaction::where('user_id', $user->id)
+            ->where('type', 'income')
             ->whereBetween('transaction_date', [$startDate->toDateString(), $endDate->toDateString()])
-            ->selectRaw("
-                COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) as total_income,
-                COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) as total_expense
-            ")
-            ->first();
+            ->sum('amount');
 
-        $totalIncomeThisMonth  = (float) ($incomeExpenseRow->total_income  ?? 0);
-        $totalExpenseThisMonth = (float) ($incomeExpenseRow->total_expense ?? 0);
+        $totalExpenseThisMonth = Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startDate->toDateString(), $endDate->toDateString()])
+            ->sum('amount');
 
         // 3. Status hemat/normal/boros
         $spendingStatus = $this->spending->analyze($user, $lang);
@@ -118,7 +135,7 @@ class DashboardController extends Controller
             ])
             ->sortByDesc('amount')
             ->values()
-            ->toArray();  // ← wajib: cache harus menyimpan plain array, bukan Collection
+            ->toArray();
 
         // 5. Transaksi terbaru (5 terakhir)
         $recentTransactions = Transaction::where('user_id', $user->id)
@@ -127,47 +144,42 @@ class DashboardController extends Controller
             ->orderByDesc('created_at')
             ->limit(5)
             ->get()
-            ->toArray();  // ← wajib: serialisasi model Eloquent ke plain array untuk cache
+            ->toArray();
 
-
-        // 6. Weekly Trend (Sen - Min) - 1 query UNION untuk minggu ini + minggu lalu
+        // 6. Weekly Trend (Sen - Min) - Single aggregated query for this week and last week
         $startOfThisWeek = now()->startOfWeek();
         $endOfThisWeek   = now()->endOfWeek();
         $startOfLastWeek = now()->subWeek()->startOfWeek();
         $endOfLastWeek   = now()->subWeek()->endOfWeek();
 
-        // Satu query UNION menggantikan 2 query terpisah
-        $weeklyRows = DB::select("
-            SELECT transaction_date, SUM(amount) as total, 'this' as week_label
-            FROM transactions
-            WHERE user_id = ? AND type = 'expense' AND deleted_at IS NULL
-              AND transaction_date BETWEEN ? AND ?
-            GROUP BY transaction_date
-            UNION ALL
-            SELECT transaction_date, SUM(amount) as total, 'last' as week_label
-            FROM transactions
-            WHERE user_id = ? AND type = 'expense' AND deleted_at IS NULL
-              AND transaction_date BETWEEN ? AND ?
-            GROUP BY transaction_date
-        ", [
-            $user->id, $startOfThisWeek->toDateString(), $endOfThisWeek->toDateString(),
-            $user->id, $startOfLastWeek->toDateString(), $endOfLastWeek->toDateString(),
-        ]);
-
         $thisWeekGrouped = [];
-        $lastWeekGrouped = [];
-        foreach ($weeklyRows as $row) {
+        foreach (
+            Transaction::where('user_id', $user->id)
+                ->where('type', 'expense')
+                ->whereBetween('transaction_date', [$startOfThisWeek->toDateString(), $endOfThisWeek->toDateString()])
+                ->selectRaw('transaction_date, SUM(amount) as total')
+                ->groupBy('transaction_date')
+                ->get() as $row
+        ) {
             $dow = \Carbon\Carbon::parse($row->transaction_date)->dayOfWeek + 1;
-            if ($row->week_label === 'this') {
-                $thisWeekGrouped[$dow] = ($thisWeekGrouped[$dow] ?? 0) + (float) $row->total;
-            } else {
-                $lastWeekGrouped[$dow] = ($lastWeekGrouped[$dow] ?? 0) + (float) $row->total;
-            }
+            $thisWeekGrouped[$dow] = ($thisWeekGrouped[$dow] ?? 0) + (float) $row->total;
         }
 
-        $daysMap   = [2 => 'Sen', 3 => 'Sel', 4 => 'Rab', 5 => 'Kam', 6 => 'Jum', 7 => 'Sab', 1 => 'Min'];
+        $lastWeekGrouped = [];
+        foreach (
+            Transaction::where('user_id', $user->id)
+                ->where('type', 'expense')
+                ->whereBetween('transaction_date', [$startOfLastWeek->toDateString(), $endOfLastWeek->toDateString()])
+                ->selectRaw('transaction_date, SUM(amount) as total')
+                ->groupBy('transaction_date')
+                ->get() as $row
+        ) {
+            $dow = \Carbon\Carbon::parse($row->transaction_date)->dayOfWeek + 1;
+            $lastWeekGrouped[$dow] = ($lastWeekGrouped[$dow] ?? 0) + (float) $row->total;
+        }
 
-        // Cari nilai pengeluaran maksimum di seluruh hari (minggu ini & minggu lalu)
+        $daysMap     = [2 => 'Sen', 3 => 'Sel', 4 => 'Rab', 5 => 'Kam', 6 => 'Jum', 7 => 'Sab', 1 => 'Min'];
+
         $maxWeekly = 0;
         foreach ([2, 3, 4, 5, 6, 7, 1] as $idx) {
             $thisAmt = (float) ($thisWeekGrouped[$idx] ?? 0);
@@ -191,7 +203,7 @@ class DashboardController extends Controller
             ];
         }
 
-        // 7. Monthly Trend (Past 6 months) - 1 query UNION untuk tahun ini + tahun lalu
+        // 7. Monthly Trend (Past 6 months)
         $driver    = DB::getDriverName();
         $monthExpr = match ($driver) {
             'sqlite' => "strftime('%Y-%m', transaction_date)",
@@ -204,35 +216,22 @@ class DashboardController extends Controller
         $startMonthLastYear = now()->subMonths(5)->subYear()->startOfMonth();
         $endMonthLastYear   = now()->subYear()->endOfMonth();
 
-        // Satu query UNION menggantikan 2 query terpisah
-        $monthlyRows = DB::select("
-            SELECT {$monthExpr} as period, SUM(amount) as total, 'this' as year_label
-            FROM transactions
-            WHERE user_id = ? AND type = 'expense' AND deleted_at IS NULL
-              AND transaction_date BETWEEN ? AND ?
-            GROUP BY {$monthExpr}
-            UNION ALL
-            SELECT {$monthExpr} as period, SUM(amount) as total, 'last' as year_label
-            FROM transactions
-            WHERE user_id = ? AND type = 'expense' AND deleted_at IS NULL
-              AND transaction_date BETWEEN ? AND ?
-            GROUP BY {$monthExpr}
-        ", [
-            $user->id, $startMonth->toDateString(), $endMonth->toDateString(),
-            $user->id, $startMonthLastYear->toDateString(), $endMonthLastYear->toDateString(),
-        ]);
+        $thisYearMonthSums = Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startMonth->toDateString(), $endMonth->toDateString()])
+            ->selectRaw("{$monthExpr} as period, SUM(amount) as total")
+            ->groupByRaw($monthExpr)
+            ->pluck('total', 'period')
+            ->toArray();
 
-        $thisYearMonthSums = [];
-        $lastYearMonthSums = [];
-        foreach ($monthlyRows as $row) {
-            if ($row->year_label === 'this') {
-                $thisYearMonthSums[$row->period] = (float) $row->total;
-            } else {
-                $lastYearMonthSums[$row->period] = (float) $row->total;
-            }
-        }
+        $lastYearMonthSums = Transaction::where('user_id', $user->id)
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startMonthLastYear->toDateString(), $endMonthLastYear->toDateString()])
+            ->selectRaw("{$monthExpr} as period, SUM(amount) as total")
+            ->groupByRaw($monthExpr)
+            ->pluck('total', 'period')
+            ->toArray();
 
-        // Cari nilai pengeluaran maksimum di seluruh 6 bulan (tahun ini & tahun lalu)
         $maxMonthly = 0;
         for ($i = 0; $i < 6; $i++) {
             $currentDate       = $startMonth->copy()->addMonths($i);
@@ -280,3 +279,55 @@ class DashboardController extends Controller
         ];
     }
 }
+PHP;
+
+if (file_put_contents($ctrlFile, $fullControllerCode)) {
+    echo "[OK] DashboardController.php berhasil diperbarui (Debounced quest write).\n";
+} else {
+    echo "[FAIL] Gagal menulis DashboardController.php.\n";
+}
+
+// ── 2. Bootstrap Laravel & Compile Optimizations ──────────────────────
+try {
+    require $base . '/vendor/autoload.php';
+    $app = require_once $base . '/bootstrap/app.php';
+    $kernel = $app->make(\Illuminate\Contracts\Console\Kernel::class);
+    $kernel->bootstrap();
+
+    echo "\n[1/3] Membersihkan cache lama...\n";
+    \Illuminate\Support\Facades\Artisan::call('optimize:clear');
+    echo trim(\Illuminate\Support\Facades\Artisan::output()) . "\n";
+
+    echo "\n[2/3] Mengompilasi Route Cache (Cepat & Low Memory)...\n";
+    \Illuminate\Support\Facades\Artisan::call('route:cache');
+    echo trim(\Illuminate\Support\Facades\Artisan::output()) . "\n";
+
+    echo "\n[3/3] Mengompilasi Config Cache...\n";
+    \Illuminate\Support\Facades\Artisan::call('config:cache');
+    echo trim(\Illuminate\Support\Facades\Artisan::output()) . "\n";
+
+    echo "\n[OK] Optimasi Laravel Sukses Disimpan!\n";
+} catch (\Throwable $e) {
+    echo "\n[ERROR Artisan] " . $e->getMessage() . "\n";
+}
+
+// ── 3. Diagnostic Info ────────────────────────────────────────────────
+echo "\n─── Status Server & OPcache ───\n";
+echo "PHP Version: " . PHP_VERSION . "\n";
+echo "Server Software: " . ($_SERVER['SERVER_SOFTWARE'] ?? 'Unknown') . "\n";
+echo "Memory Limit: " . ini_get('memory_limit') . "\n";
+echo "Max Execution Time: " . ini_get('max_execution_time') . "s\n";
+
+if (function_exists('opcache_get_status')) {
+    $op = @opcache_get_status(false);
+    if ($op && !empty($op['opcache_enabled'])) {
+        $hits = $op['opcache_statistics']['opcache_hit_rate'] ?? 0;
+        echo "OPcache: AKTIF (Hit rate: " . round($hits, 2) . "%)\n";
+    } else {
+        echo "OPcache: TIDAK AKTIF / Dibatasi oleh shared hosting.\n";
+    }
+} else {
+    echo "OPcache: Extension tidak tersedia.\n";
+}
+
+echo "\n=== Selesai. Silakan HAPUS file patch_optimize.php demi keamanan! ===\n";

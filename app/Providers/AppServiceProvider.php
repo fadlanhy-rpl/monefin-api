@@ -59,14 +59,13 @@ class AppServiceProvider extends ServiceProvider
                 : Limit::perMinute(0);
         });
 
-        // AI Connection Test — hanya untuk setup, dibatasi sangat ketat
-        // 3 request per 10 menit per user (cukup untuk test koneksi berulang saat setup)
+        // AI Connection Test — longgarkan untuk kemudahan setup (30 request per menit per user)
         RateLimiter::for('ai-connection-test', function (Request $request) {
             return $request->user()
-                ? Limit::perMinutes(10, 3)->by('ai-test:' . $request->user()->id)
+                ? Limit::perMinute(30)->by('ai-test:' . $request->user()->id)
                     ->response(fn () => response()->json([
                         'ok'      => false,
-                        'message' => 'Terlalu banyak percobaan test koneksi. Tunggu beberapa menit.',
+                        'message' => 'Terlalu banyak percobaan test koneksi. Tunggu 1 menit.',
                         'code'    => 'RATE_LIMITED',
                     ], 429))
                 : Limit::perMinute(0);

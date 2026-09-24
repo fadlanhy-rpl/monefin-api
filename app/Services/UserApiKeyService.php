@@ -47,13 +47,9 @@ class UserApiKeyService
     public function getDecryptedKey(User $user, ?string $provider = null): ?string
     {
         $prefs = $user->preferences ?? [];
-        if (!($prefs['ai_enabled'] ?? false)) {
-            return null;
-        }
-
         $aiConfig = $prefs['ai_config'] ?? [];
         $targetProvider = $provider ?: ($aiConfig['provider'] ?? 'openai');
-        $encryptedKey = $aiConfig['api_key'] ?? null;
+        $encryptedKey = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? null);
 
         if (!$encryptedKey) {
             return null;

@@ -186,7 +186,7 @@ class ProcessTransactionSideEffects implements ShouldQueue
             'type'          => 'budget_alert',
             'period_type'   => 'monthly',
             'period_label'  => $periodLabel,
-            'spent_percent' => $percent,
+            'spent_percent' => min(999.99, max(0.00, (float) $percent)),
             'message'       => $message,
             'is_read'       => false,
             'created_at'    => now(),
