@@ -191,6 +191,45 @@ class FinancialHealthNarrativeGenerator
             ];
         }
 
+        // Priority 8 — Audit Recurring Bills
+        if (count($tips) < 3) {
+            $tips[] = [
+                'type'         => 'expense',
+                'title'        => $lang === 'en' ? 'Audit Recurring Bills' : 'Evaluasi Pengeluaran Rutin',
+                'body'         => $lang === 'en'
+                    ? "Review active subscriptions & scheduled bills to cut unused services and optimize recurring expenses."
+                    : "Tinjau langganan dan tagihan rutin Anda untuk memotong pengeluaran pasif yang tidak terpakai.",
+                'action_label' => $lang === 'en' ? 'Manage Recurring' : 'Atur Rutin',
+                'action_url'   => '/recurring',
+            ];
+        }
+
+        // Priority 9 — Emergency Cushion / Goals
+        if (count($tips) < 3) {
+            $tips[] = [
+                'type'         => 'goal',
+                'title'        => $lang === 'en' ? 'Boost Emergency Cushion' : 'Optimalkan Dana Darurat',
+                'body'         => $lang === 'en'
+                    ? "With positive cash flow, dedicate excess surplus toward an emergency fund or long-term growth targets."
+                    : "Dengan arus kas yang positif, sisihkan kelebihan dana ke target dana darurat atau tabungan jangka panjang.",
+                'action_label' => $lang === 'en' ? 'View Goals' : 'Cek Goals',
+                'action_url'   => '/goals',
+            ];
+        }
+
+        // Priority 10 — Spending Trends / Reports
+        if (count($tips) < 3) {
+            $tips[] = [
+                'type'         => 'saving',
+                'title'        => $lang === 'en' ? 'Analyze Spending Trends' : 'Analisis Tren Finansial',
+                'body'         => $lang === 'en'
+                    ? "Inspect your monthly cashflow velocity and category distribution in detailed financial reports."
+                    : "Periksa grafik perputaran uang dan sebaran kategori pengeluaran Anda di menu Laporan.",
+                'action_label' => $lang === 'en' ? 'View Reports' : 'Lihat Laporan',
+                'action_url'   => '/reports',
+            ];
+        }
+
         return array_slice($tips, 0, 3);
     }
 
