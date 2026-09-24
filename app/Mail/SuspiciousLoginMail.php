@@ -28,8 +28,24 @@ class SuspiciousLoginMail extends Mailable
      */
     public function envelope(): Envelope
     {
+        $fromAddress = config('mail.from.address', 'monefin.techapp@gmail.com');
+        $fromName    = config('mail.from.name', 'MoneFin');
+
         return new Envelope(
-            subject: 'Peringatan Keamanan: Upaya Login Mencurigakan – ' . config('app.name'),
+            subject: 'Peringatan Keamanan: Upaya Login Mencurigakan – ' . config('app.name', 'MoneFin'),
+            replyTo: [
+                new \Illuminate\Mail\Mailables\Address($fromAddress, $fromName),
+            ],
+        );
+    }
+
+    public function headers(): \Illuminate\Mail\Mailables\Headers
+    {
+        return new \Illuminate\Mail\Mailables\Headers(
+            text: [
+                'Auto-Submitted'           => 'auto-generated',
+                'X-Auto-Response-Suppress' => 'All',
+            ],
         );
     }
 
@@ -40,6 +56,7 @@ class SuspiciousLoginMail extends Mailable
     {
         return new Content(
             view: 'emails.suspicious_login',
+            text: 'emails.suspicious_login_plain',
         );
     }
 

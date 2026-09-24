@@ -33,7 +33,7 @@ class NewLoginAlertMail extends Mailable implements ShouldQueue
         $this->loginTime   = $loginTime;
         $this->actionToken = $actionToken;
 
-        $frontendUrl     = env('FRONTEND_URL', 'http://localhost:3000');
+        $frontendUrl     = config('app.frontend_url', 'https://monefin.web.id');
         $this->secureUrl = rtrim($frontendUrl, '/') . '/secure-account?token=' . urlencode($actionToken);
     }
 
@@ -42,8 +42,24 @@ class NewLoginAlertMail extends Mailable implements ShouldQueue
      */
     public function envelope(): Envelope
     {
+        $fromAddress = config('mail.from.address', 'monefin.techapp@gmail.com');
+        $fromName    = config('mail.from.name', 'MoneFin');
+
         return new Envelope(
-            subject: 'Peringatan Keamanan: Login Baru Terdeteksi – ' . config('app.name'),
+            subject: 'Peringatan Keamanan: Login Baru Terdeteksi – ' . config('app.name', 'MoneFin'),
+            replyTo: [
+                new \Illuminate\Mail\Mailables\Address($fromAddress, $fromName),
+            ],
+        );
+    }
+
+    public function headers(): \Illuminate\Mail\Mailables\Headers
+    {
+        return new \Illuminate\Mail\Mailables\Headers(
+            text: [
+                'Auto-Submitted'           => 'auto-generated',
+                'X-Auto-Response-Suppress' => 'All',
+            ],
         );
     }
 
@@ -54,6 +70,7 @@ class NewLoginAlertMail extends Mailable implements ShouldQueue
     {
         return new Content(
             view: 'emails.new_login_alert',
+            text: 'emails.new_login_alert_plain',
         );
     }
 

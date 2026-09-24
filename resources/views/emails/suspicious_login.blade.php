@@ -159,7 +159,7 @@
                                                     <p style="margin: 0 0 16px 0; font-size: 15px; font-weight: 600; color: #0F172A; text-align: center;">
                                                         Jika ini bukan Anda, segera ubah kata sandi akun Anda:
                                                     </p>
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/forgot-password?email={{ urlencode($email) }}" class="btn-secure" style="display: inline-block;">
+                                                    <a href="{{ config('app.frontend_url') }}/forgot-password?email={{ urlencode($email) }}" class="btn-secure" style="display: inline-block;">
                                                         Amankan Akun & Ganti Password →
                                                     </a>
                                                 </td>
@@ -173,8 +173,8 @@
                                                     <span style="display: block; font-size: 11px; font-weight: 600; color: #64748B; margin-bottom: 4px;">
                                                         Atau salin tautan pemulihan berikut ke browser Anda:
                                                     </span>
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/forgot-password?email={{ urlencode($email) }}" style="font-size: 12px; color: #00685F; font-weight: 600; word-break: break-all; text-decoration: underline;">
-                                                        {{ env('FRONTEND_URL', 'http://localhost:3000') }}/forgot-password?email={{ urlencode($email) }}
+                                                    <a href="{{ config('app.frontend_url') }}/forgot-password?email={{ urlencode($email) }}" style="font-size: 12px; color: #00685F; font-weight: 600; word-break: break-all; text-decoration: underline;">
+                                                        {{ config('app.frontend_url') }}/forgot-password?email={{ urlencode($email) }}
                                                     </a>
                                                 </td>
                                             </tr>
@@ -203,11 +203,11 @@
                                         <table border="0" cellpadding="0" cellspacing="0" width="100%">
                                             <tr>
                                                 <td align="center">
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/security" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Pusat Keamanan</a>
+                                                    <a href="{{ config('app.frontend_url') }}/security" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Pusat Keamanan</a>
                                                     <span style="color: #CBD5E1; font-size: 11px;">•</span>
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/privacy" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Kebijakan Privasi</a>
+                                                    <a href="{{ config('app.frontend_url') }}/privacy" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Kebijakan Privasi</a>
                                                     <span style="color: #CBD5E1; font-size: 11px;">•</span>
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/terms" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Ketentuan Layanan</a>
+                                                    <a href="{{ config('app.frontend_url') }}/terms" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Ketentuan Layanan</a>
                                                 </td>
                                             </tr>
                                         </table>

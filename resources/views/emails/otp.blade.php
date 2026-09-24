@@ -207,7 +207,7 @@
 
                                         <!-- Help & Not You Text -->
                                         <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #94A3B8; text-align: center;">
-                                            Jika Anda tidak merasa melakukan tindakan ini, mohon abaikan email ini atau segera hubungi <a href="mailto:support@monefin.com" style="color: #00685F; font-weight: 600; text-decoration: underline;">support@monefin.com</a>.
+                                            Jika Anda tidak merasa melakukan tindakan ini, mohon abaikan email ini atau segera hubungi <a href="mailto:monefin.techapp@gmail.com" style="color: #00685F; font-weight: 600; text-decoration: underline;">monefin.techapp@gmail.com</a>.
                                         </p>
 
                                     </td>
@@ -219,11 +219,11 @@
                                         <table border="0" cellpadding="0" cellspacing="0" width="100%">
                                             <tr>
                                                 <td align="center">
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/security" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Keamanan</a>
+                                                    <a href="{{ config('app.frontend_url') }}/security" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Keamanan</a>
                                                     <span style="color: #CBD5E1; font-size: 11px;">•</span>
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/privacy" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Kebijakan Privasi</a>
+                                                    <a href="{{ config('app.frontend_url') }}/privacy" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Kebijakan Privasi</a>
                                                     <span style="color: #CBD5E1; font-size: 11px;">•</span>
-                                                    <a href="{{ env('FRONTEND_URL', 'http://localhost:3000') }}/terms" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Ketentuan Layanan</a>
+                                                    <a href="{{ config('app.frontend_url') }}/terms" style="color: #64748B; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 10px; display: inline-block;">Ketentuan Layanan</a>
                                                 </td>
                                             </tr>
                                         </table>
