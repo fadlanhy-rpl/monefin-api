@@ -110,8 +110,17 @@ class PasswordResetController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if (!$user || !$user->password) {
+        if (!$user) {
             return $genericResponse;
+        }
+
+        // Akun terdaftar via Google OAuth tanpa password lokal.
+        // Berikan respons informatif agar user tahu harus login via Google.
+        if (!$user->password) {
+            return response()->json([
+                'message'    => 'Akun ini terdaftar melalui Google. Silakan login dengan Google, lalu atur password di menu Pengaturan > Keamanan.',
+                'oauth_only' => true,
+            ]);
         }
 
         $otp = OtpCode::generateFor($request->email, 'reset', 5);
