@@ -18,25 +18,28 @@ class BudgetController extends Controller
     ) {}
     public function index(Request $request): AnonymousResourceCollection
     {
-        $month = $request->month ?? now()->month;
-        $year  = $request->year  ?? now()->year;
+        $userId = $request->user()->id;
+        $month  = (int) ($request->month ?? now()->month);
+        $year   = (int) ($request->year  ?? now()->year);
 
-        $budgets = Budget::where('user_id', $request->user()->id)
+        $startDate = \Carbon\Carbon::create($year, $month, 1)->startOfMonth()->toDateString();
+        $endDate   = \Carbon\Carbon::create($year, $month, 1)->endOfMonth()->toDateString();
+
+        // Ambil akumulasi pengeluaran per kategori dalam 1 query tunggal (memanfaatkan composite index tx_user_cat_date_idx)
+        $spentMap = Transaction::where('user_id', $userId)
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startDate, $endDate])
+            ->groupBy('category_id')
+            ->selectRaw('category_id, COALESCE(SUM(amount), 0) as total')
+            ->pluck('total', 'category_id');
+
+        $budgets = Budget::where('user_id', $userId)
             ->where('month', $month)
             ->where('year', $year)
             ->with('category')
             ->get()
-            ->map(function (Budget $budget) {
-                // Hitung total pengeluaran di kategori & bulan ini
-                $spent = Transaction::where('user_id', $budget->user_id)
-                    ->where('category_id', $budget->category_id)
-                    ->where('type', 'expense')
-                    ->whereYear('transaction_date', $budget->year)
-                    ->whereMonth('transaction_date', $budget->month)
-                    ->sum('amount');
-
-                $budget->spent_amount = $spent;
-
+            ->map(function (Budget $budget) use ($spentMap) {
+                $budget->spent_amount = (float) ($spentMap[$budget->category_id] ?? 0);
                 return $budget;
             });
 

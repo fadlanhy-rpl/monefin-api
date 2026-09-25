@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
@@ -422,13 +423,13 @@ class ReportExportService
             $label = $ci === 0 ? 'Terbesar' : ($ci === $categoryStats->count() - 1 ? 'Terkecil' : '');
 
             $ws->setCellValue("A{$r}", $ci + 1);
-            $ws->setCellValue("B{$r}", $cat['name']);
-            $ws->setCellValue("C{$r}", ucfirst($cat['type']));
+            $ws->setCellValueExplicit("B{$r}", $this->sanitizeFormula($cat['name']), DataType::TYPE_STRING);
+            $ws->setCellValueExplicit("C{$r}", ucfirst($cat['type']), DataType::TYPE_STRING);
             $ws->setCellValue("D{$r}", $cat['count']);
             $ws->setCellValue("E{$r}", $cat['total']);
             $ws->setCellValue("F{$r}", $cat['avg']);
             $ws->setCellValue("G{$r}", $pct / 100);
-            $ws->setCellValue("H{$r}", $label);
+            $ws->setCellValueExplicit("H{$r}", $label, DataType::TYPE_STRING);
 
             $ws->getStyle("E{$r}")->getNumberFormat()->setFormatCode($currFormat);
             $ws->getStyle("F{$r}")->getNumberFormat()->setFormatCode($currFormat);
@@ -484,13 +485,13 @@ class ReportExportService
             $tc    = $isInc ? self::C_GREEN : self::C_RED;
 
             $ws->setCellValue("A{$r}", $ti + 1);
-            $ws->setCellValue("B{$r}", $t->transaction_date->format('d/m/Y'));
-            $ws->setCellValue("C{$r}", ucfirst($t->type));
-            $ws->setCellValue("D{$r}", $t->category?->name ?? '-');
-            $ws->setCellValue("E{$r}", $t->account?->name  ?? '-');
+            $ws->setCellValueExplicit("B{$r}", $t->transaction_date->format('d/m/Y'), DataType::TYPE_STRING);
+            $ws->setCellValueExplicit("C{$r}", ucfirst($t->type), DataType::TYPE_STRING);
+            $ws->setCellValueExplicit("D{$r}", $this->sanitizeFormula($t->category?->name ?? '-'), DataType::TYPE_STRING);
+            $ws->setCellValueExplicit("E{$r}", $this->sanitizeFormula($t->account?->name  ?? '-'), DataType::TYPE_STRING);
             $ws->setCellValue("F{$r}", (float) $t->amount / $exchangeRate);
-            $ws->setCellValue("G{$r}", $t->transaction_date->format('Y-m'));
-            $ws->setCellValue("H{$r}", $t->description ?? '');
+            $ws->setCellValueExplicit("G{$r}", $t->transaction_date->format('Y-m'), DataType::TYPE_STRING);
+            $ws->setCellValueExplicit("H{$r}", $this->sanitizeFormula($t->description ?? ''), DataType::TYPE_STRING);
 
             $ws->getStyle("F{$r}")->getNumberFormat()->setFormatCode($currFormat);
 
@@ -553,5 +554,23 @@ class ReportExportService
         $ws->getStyle("A{$row}")->getFont()->setSize($sz)->getColor()->setRGB($fgColor);
         $ws->getStyle("A{$row}")->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setRGB($bgColor);
         $ws->getStyle("A{$row}")->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
+    }
+
+    /**
+     * Sanitize user input strings against CSV/Excel Formula Injection (CWE-1236).
+     * Prefixes a single quote if string starts with formula trigger characters: =, +, -, @, tab, newline.
+     */
+    private function sanitizeFormula(?string $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        $firstChar = substr($value, 0, 1);
+        if (in_array($firstChar, ['=', '+', '-', '@', "\t", "\r", "\n"], true)) {
+            return "'" . $value;
+        }
+
+        return $value;
     }
 }

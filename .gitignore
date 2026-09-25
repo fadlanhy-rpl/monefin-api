@@ -26,3 +26,10 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Temporary patch & maintenance scripts
+/public/patch*.php
+/public/fix_*.php
+/public/sync_*.php
+*.bak_*
+

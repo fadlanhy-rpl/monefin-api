@@ -48,23 +48,18 @@ class UserApiKeyService
     {
         $prefs = $user->preferences ?? [];
         $aiConfig = $prefs['ai_config'] ?? [];
-        $targetProvider = $provider ?: ($aiConfig['provider'] ?? 'openai');
         $encryptedKey = $aiConfig['api_key_encrypted'] ?? ($aiConfig['api_key'] ?? null);
 
         if (!$encryptedKey) {
             return null;
         }
 
-        $cacheKey = "user:{$user->id}:ai_key:{$targetProvider}";
-
-        return Cache::remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($encryptedKey) {
-            try {
-                return Crypt::decryptString($encryptedKey);
-            } catch (\Throwable $e) {
-                Log::warning("Failed to decrypt user AI API key: {$e->getMessage()}");
-                return null;
-            }
-        });
+        try {
+            return Crypt::decryptString($encryptedKey);
+        } catch (\Throwable $e) {
+            Log::warning("Failed to decrypt user AI API key: {$e->getMessage()}");
+            return null;
+        }
     }
 
     /**

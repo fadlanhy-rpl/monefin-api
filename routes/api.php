@@ -29,17 +29,21 @@ use Illuminate\Support\Facades\Route;
 // ─── Public Auth Routes (rate limited) ───────────────────────────────────────
 Route::middleware('throttle:60,1')->group(function () {
     Route::post('/auth/login',           [AuthController::class, 'login']);
-    Route::post('/auth/register',        [AuthController::class, 'register']);
     Route::post('/auth/verify-email',    [PasswordResetController::class, 'verifyEmail']);
-    Route::post('/auth/resend-otp',      [PasswordResetController::class, 'resendOtp']);
-    Route::post('/auth/forgot-password', [PasswordResetController::class, 'forgotPassword']);
-    Route::post('/auth/reset-password',  [PasswordResetController::class, 'resetPassword']);
     Route::post('/auth/verify-2fa',      [TwoFactorAuthController::class, 'verify2fa']);
     Route::post('/auth/secure-account',  [AccountSecurityController::class, 'secureAccount']);
 
+    // Proteksi spamming & email bombing (maksimal 10 request per menit per IP)
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('/auth/register',        [AuthController::class, 'register']);
+        Route::post('/auth/resend-otp',      [PasswordResetController::class, 'resendOtp']);
+        Route::post('/auth/forgot-password', [PasswordResetController::class, 'forgotPassword']);
+        Route::post('/auth/reset-password',  [PasswordResetController::class, 'resetPassword']);
+        Route::post('/register',             [AuthController::class, 'register']);
+    });
+
     // ─── Backward-compatible aliases (agar kode frontend lama tidak break) ────
     Route::post('/login',    [AuthController::class, 'login']);
-    Route::post('/register', [AuthController::class, 'register']);
 });
 
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
@@ -82,9 +86,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // Transactions
     Route::apiResource('transactions', TransactionController::class);
 
-    // Receipt Scanning (Pindai Struk)
-    Route::post('/receipts/scan',    [ReceiptController::class, 'scan']);
-    Route::post('/receipts/confirm', [ReceiptController::class, 'confirm']);
+    // Receipt Scanning (Pindai Struk) — rate limited 10 req/menit per user
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('/receipts/scan',    [ReceiptController::class, 'scan']);
+        Route::post('/receipts/confirm', [ReceiptController::class, 'confirm']);
+    });
 
     // Budgets
     Route::apiResource('budgets', BudgetController::class);

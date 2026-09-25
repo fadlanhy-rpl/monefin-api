@@ -8,6 +8,7 @@ use App\Services\ReportExportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
@@ -30,8 +31,12 @@ class ReportController extends Controller
     {
         $user = $request->user();
 
-        // Rekam aksi misi evaluasi / review laporan finansial
-        $this->gamification->recordQuestAction($user, 'check_analytics', 1);
+        // Rekam aksi misi evaluasi / review laporan finansial (maksimal 1x per hari per user)
+        $questRecordedTodayKey = "quest_recorded:{$user->id}:check_analytics:" . now()->toDateString();
+        if (!Cache::has($questRecordedTodayKey)) {
+            $this->gamification->recordQuestAction($user, 'check_analytics', 1);
+            Cache::put($questRecordedTodayKey, true, now()->endOfDay());
+        }
 
         if ($request->start_month && $request->end_month) {
             [$startYear, $startMonth] = explode('-', $request->start_month);

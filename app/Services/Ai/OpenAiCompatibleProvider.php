@@ -51,7 +51,8 @@ class OpenAiCompatibleProvider implements AiProvider
         $this->model = $model;
 
         if ($provider === 'custom' && !empty($customBaseUrl)) {
-            $url = rtrim(trim($customBaseUrl), '/');
+            $validatedUrl = SsrfUrlValidator::validate($customBaseUrl);
+            $url = rtrim($validatedUrl, '/');
             if (str_ends_with($url, '/chat/completions')) {
                 $url = substr($url, 0, -strlen('/chat/completions'));
             }
@@ -96,8 +97,8 @@ class OpenAiCompatibleProvider implements AiProvider
                 return "Terjadi kesalahan: Model AI '{$this->model}' tidak merespons (timeout 15 detik). Provider OpenRouter sedang mengalami antrean padat untuk model ini atau model sedang tidak aktif. Silakan coba model lain (misal: inclusionai/ling-3.0-flash-vl:free) atau gunakan Google Gemini.";
             }
 
-            // Graceful fallback: If SSL certificate verification fails (cURL error 60), retry without SSL verification
-            if (str_contains($e->getMessage(), 'cURL error 60') || str_contains($e->getMessage(), 'SSL certificate')) {
+            // Graceful fallback: If SSL certificate verification fails (cURL error 60), retry without SSL verification ONLY for standard known providers (never for untrusted custom endpoints)
+            if ($this->provider !== 'custom' && (str_contains($e->getMessage(), 'cURL error 60') || str_contains($e->getMessage(), 'SSL certificate'))) {
                 try {
                     $response = Http::timeout(15)
                         ->withOptions(['verify' => false])
