@@ -46,6 +46,9 @@ Route::middleware('throttle:60,1')->group(function () {
     Route::post('/login',    [AuthController::class, 'login']);
 });
 
+// ─── Health Check ─────────────────────────────────────────────────────────────
+Route::get('/up', fn () => response()->json(['status' => 'UP', 'time' => now()->toISOString()]));
+
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 Route::get('/auth/google',          [GoogleAuthController::class, 'redirectToGoogle']);
 Route::get('/auth/google/callback', [GoogleAuthController::class, 'handleGoogleCallback']);

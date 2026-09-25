@@ -26,6 +26,20 @@ class SsrfUrlValidator
     ];
 
     /**
+     * Domain publik resmi AI yang terverifikasi aman.
+     * Lewati panggilan gethostbynamel() untuk domain ini agar tidak menambah latensi DNS 1-5 detik pada shared host.
+     */
+    private const TRUSTED_AI_DOMAINS = [
+        'api.openai.com',
+        'generativelanguage.googleapis.com',
+        'api.deepseek.com',
+        'api.moonshot.cn',
+        'api.x.ai',
+        'api.groq.com',
+        'openrouter.ai',
+    ];
+
+    /**
      * Validate an external AI endpoint URL against SSRF vulnerabilities.
      * Returns the normalized clean URL or throws an exception.
      *
@@ -54,6 +68,13 @@ class SsrfUrlValidator
         }
 
         $host = strtolower($parts['host']);
+
+        // Fast-path: jika host merupakan domain provider AI publik resmi, bypass pengecekan DNS
+        foreach (self::TRUSTED_AI_DOMAINS as $trusted) {
+            if ($host === $trusted || str_ends_with($host, '.' . $trusted)) {
+                return $url;
+            }
+        }
 
         // In production, block localhost names
         if (!$isLocalEnv) {
