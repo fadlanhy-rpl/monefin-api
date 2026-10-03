@@ -53,9 +53,14 @@ class GoogleAuthController extends Controller
             /** @var \Laravel\Socialite\Two\AbstractProvider $driver */
             $driver = Socialite::driver('google');
 
-            if (app()->environment('local')) {
-                $driver->setHttpClient(new \GuzzleHttp\Client(['verify' => false]));
-            }
+            // Batasi HTTP ke Google (token exchange + userinfo): timeout 12 dtk,
+            // connect 5 dtk. Tanpa ini, outbound lambat di shared hosting bisa
+            // menggantung puluhan detik (default Guzzle).
+            $driver->setHttpClient(new \GuzzleHttp\Client([
+                'timeout'         => 12,
+                'connect_timeout' => 5,
+                'verify'          => !app()->environment('local'),
+            ]));
 
             $googleUser = $driver->stateless()->user();
 
@@ -80,7 +85,7 @@ class GoogleAuthController extends Controller
                 }
             }
 
-            $frontendUrl = config('services.frontend_url', env('FRONTEND_URL', 'http://localhost:3000'));
+            $frontendUrl = $this->frontendUrl();
 
             // Jika user mengaktifkan 2FA, kirim OTP dan redirect ke halaman verifikasi
             if ($user->two_factor_enabled) {
@@ -104,15 +109,41 @@ class GoogleAuthController extends Controller
                 );
             }
 
-            // Normal flow: langsung buat token dengan info device
+            // Normal flow: langsung buat token dengan info device + kirim snapshot user
+            // agar halaman /auth/callback dapat menghidrasi AuthContext secara instan (0ms)
+            // tanpa terjebak layar putih saat menunggu TTFB shared hosting.
             $token = $this->authTokenService->createToken($user, $request);
+            $userPayload = rtrim(strtr(base64_encode(json_encode($user)), '+/', '-_'), '=');
 
-            return redirect($frontendUrl . '/auth/callback?token=' . $token);
+            return redirect(
+                $frontendUrl . '/auth/callback?token=' . urlencode($token) . '&user=' . urlencode($userPayload)
+            );
 
         } catch (\Exception $e) {
             Log::error('Google Login Error: ' . $e->getMessage());
-            $frontendUrl = config('services.frontend_url', env('FRONTEND_URL', 'http://localhost:3000'));
+            $frontendUrl = $this->frontendUrl();
             return redirect($frontendUrl . '/login?error=' . urlencode('Login dengan Google gagal. Silakan coba lagi.'));
         }
+    }
+
+    /**
+     * URL frontend publik untuk redirect OAuth.
+     *
+     * Wajib via config (bukan env() langsung): setelah config:cache, env()
+     * runtime selalu null sehingga fallback lama jatuh ke localhost:3000.
+     * Pengaman: di production / host publik, URL localhost tidak pernah diizinkan keluar.
+     */
+    private function frontendUrl(): string
+    {
+        $url = rtrim((string) config('services.frontend_url', 'http://localhost:3000'), '/');
+        $host = request()->getHost();
+        $isPublicHost = !in_array($host, ['localhost', '127.0.0.1'], true);
+
+        if (($isPublicHost || app()->environment('production')) && ($url === '' || str_contains($url, 'localhost') || str_contains($url, '127.0.0.1'))) {
+            Log::warning('FRONTEND_URL fallback ke production (config frontend_url menunjuk localhost di host publik)');
+            $url = 'https://www.monefin.web.id';
+        }
+
+        return $url;
     }
 }

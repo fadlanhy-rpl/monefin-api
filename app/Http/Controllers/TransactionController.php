@@ -21,7 +21,7 @@ class TransactionController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = Transaction::where('user_id', $request->user()->id)
-            ->with(['account', 'category'])
+            ->with(['account', 'category', 'goal'])
             ->when($request->start_date, fn ($q) => $q->where('transaction_date', '>=', $request->start_date))
             ->when($request->end_date,   fn ($q) => $q->where('transaction_date', '<=', $request->end_date))
             ->when($request->category_id, fn ($q) => $q->where('category_id', $request->category_id))

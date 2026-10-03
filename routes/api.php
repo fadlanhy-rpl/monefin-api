@@ -4,6 +4,7 @@ use App\Http\Controllers\AccountController;
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\Api\AccountSecurityController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BootstrapController;
 use App\Http\Controllers\Api\GoogleAuthController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProfileController;
@@ -123,6 +124,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/trash',                      [TrashController::class, 'index']);
     Route::post('/trash/{type}/{id}/restore', [TrashController::class, 'restore']);
     Route::delete('/trash/{type}/{id}/force', [TrashController::class, 'forceDelete']);
+
+    // Bootstrap awal (1 boot untuk me+accounts+categories — hemat TTFB shared hosting)
+    Route::get('/bootstrap', [BootstrapController::class, '__invoke']);
 
     // Dashboard
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);

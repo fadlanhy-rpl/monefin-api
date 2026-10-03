@@ -45,6 +45,10 @@ return [
         'key' => env('KIMI_API_KEY', ''),
     ],
 
+    // URL frontend publik — WAJIB via config (bukan env() langsung) agar tetap
+    // benar saat config di-cache (config:cache membuat env() runtime = null).
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+
     'ai' => [
         'verify_ssl' => env('AI_VERIFY_SSL', false),
     ],
