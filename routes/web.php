@@ -18,3 +18,9 @@ Route::get('/storage/{path}', function ($path) {
         'Cache-Control' => 'public, max-age=86400',
     ]);
 })->where('path', '.*');
+
+// Fallback direct dispatch untuk request Google OAuth yang masuk via web router dengan prefix /index.php/api
+Route::get('/index.php/api/auth/google', [\App\Http\Controllers\Api\GoogleAuthController::class, 'redirectToGoogle']);
+Route::get('/index.php/api/auth/google/callback', [\App\Http\Controllers\Api\GoogleAuthController::class, 'handleGoogleCallback']);
+Route::get('/index.php/api/up', fn () => response()->json(['status' => 'UP', 'time' => now()->toISOString()]));
+

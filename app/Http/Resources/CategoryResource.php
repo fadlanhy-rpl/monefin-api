@@ -21,12 +21,13 @@ class CategoryResource extends JsonResource
             'type'         => $this->type,
             'icon'         => $this->icon,
             'description'  => $this->description,
-            'color'        => $this->color ?? 'primary', // Default color if null
-            'transactions' => $this->transactions_count ?? 0, // Loaded from withCount
-            'realization'  => 0, // Default 0 as per implementation plan
-            'is_default'   => is_null($this->user_id),
-            'created_at'   => $this->created_at,
-            'updated_at'   => $this->updated_at,
+            'color'              => $this->color ?? 'primary', // Default color if null
+            'transactions'       => (int) ($this->transactions_count ?? 0), // Loaded from withCount
+            'transactions_count' => (int) ($this->transactions_count ?? 0),
+            'realization'        => 0, // Default 0 as per implementation plan
+            'is_default'         => is_null($this->user_id),
+            'created_at'         => $this->created_at,
+            'updated_at'         => $this->updated_at,
         ];
     }
 }

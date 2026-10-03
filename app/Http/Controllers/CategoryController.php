@@ -15,10 +15,14 @@ class CategoryController extends Controller
      */
     public function index(Request $request): AnonymousResourceCollection
     {
-        $categories = Category::withCount('transactions')
-        ->where(function ($query) use ($request) {
+        $userId = $request->user()->id;
+
+        $categories = Category::withCount([
+            'transactions' => fn ($q) => $q->where('user_id', $userId),
+        ])
+        ->where(function ($query) use ($userId) {
             $query->whereNull('user_id')
-                  ->orWhere('user_id', $request->user()->id);
+                  ->orWhere('user_id', $userId);
         })
         ->when($request->type, fn ($q, $type) => $q->where('type', $type))
         ->orderByRaw('user_id IS NULL ASC') // default categories first
@@ -42,6 +46,7 @@ class CategoryController extends Controller
         ]);
 
         $category = $request->user()->categories()->create($validated);
+        $category->transactions_count = 0;
 
         return response()->json([
             'message' => 'Kategori berhasil dibuat.',
@@ -65,10 +70,13 @@ class CategoryController extends Controller
         ]);
 
         $category->update($validated);
+        $fresh = $category->fresh()->loadCount([
+            'transactions' => fn ($q) => $q->where('user_id', $request->user()->id),
+        ]);
 
         return response()->json([
             'message' => 'Kategori berhasil diperbarui.',
-            'data'    => new CategoryResource($category->fresh()),
+            'data'    => new CategoryResource($fresh),
         ]);
     }
 

@@ -6,6 +6,7 @@ use App\Models\Category;
 use App\Services\AiService;
 use App\Services\FinancialHealthService;
 use App\Services\Ai\AiProviderFactory;
+use App\Services\Ai\SsrfUrlValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -233,6 +234,17 @@ class AiController extends Controller
             ], 422);
         }
 
+        if ($provider === 'custom' && !empty($baseUrl)) {
+            try {
+                $baseUrl = SsrfUrlValidator::validate($baseUrl);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json([
+                    'ok'      => false,
+                    'message' => $e->getMessage(),
+                ], 422);
+            }
+        }
+
         $result = $this->ai->testConnectionDirect($provider, $rawKey, $model, $baseUrl);
 
         return response()->json([
@@ -315,6 +327,17 @@ class AiController extends Controller
             'api_key'      => ['nullable', 'string', 'max:500'],
             'base_url'     => ['nullable', 'string', 'max:500'],
         ]);
+
+        if (!empty($validated['base_url'])) {
+            try {
+                $validated['base_url'] = SsrfUrlValidator::validate($validated['base_url']);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                    'errors'  => ['base_url' => [$e->getMessage()]],
+                ], 422);
+            }
+        }
 
         $user  = $request->user();
         $prefs = $user->preferences ?? [];

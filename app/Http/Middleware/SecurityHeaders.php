@@ -13,14 +13,20 @@ class SecurityHeaders
      * Tambahkan security headers ke setiap response API.
      *
      * Headers ini melindungi dari MIME sniffing, clickjacking,
-     * XSS, dan kebocoran referrer — defense-in-depth layer
-     * yang bekerja di atas perlindungan laravel sendiri.
+     * XSS, dan kebocoran referrer - defense-in-depth layer
+     * yang bekerja di atas perlindungan Laravel sendiri.
      */
     public function handle(Request $request, Closure $next): Response
     {
         $response = $next($request);
 
-        // Skip untuk SSE streaming — header Content-Type sudah di-set manual
+        // Skip untuk response redirect (Google OAuth / login redirect ke frontend)
+        // agar browser tidak memblokir navigasi otomatis
+        if ($response->isRedirection()) {
+            return $response;
+        }
+
+        // Skip untuk SSE streaming - header Content-Type sudah di-set manual
         // dan menambahkan header lain bisa memutus koneksi streaming AI.
         if ($response instanceof StreamedResponse) {
             return $response;
@@ -28,9 +34,12 @@ class SecurityHeaders
 
         $response->headers->set('X-Content-Type-Options', 'nosniff');
         $response->headers->set('X-Frame-Options', 'DENY');
-        $response->headers->set('X-XSS-Protection', '1; mode=block');
         $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
         $response->headers->set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+        $response->headers->set(
+            'Strict-Transport-Security',
+            'max-age=31536000; includeSubDomains; preload'
+        );
         $response->headers->set(
             'Content-Security-Policy',
             "default-src 'none'; frame-ancestors 'none'"

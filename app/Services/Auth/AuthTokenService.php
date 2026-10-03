@@ -61,12 +61,10 @@ class AuthTokenService
         if (!Cache::has($alertKey)) {
             Cache::put($alertKey, true, now()->addDay());
 
-            $sendMailCallback = function () use ($user, $deviceName, $request, $actionToken) {
-                if (function_exists('fastcgi_finish_request')) {
-                    @fastcgi_finish_request(); // Lepaskan koneksi HTTP ke browser seketika
-                }
+            // Jika queue driver aktif (database / redis), masukkan ke antrean agar login instan (< 100ms)
+            if (config('queue.default') !== 'sync') {
                 try {
-                    Mail::to($user->email)->send(new NewLoginAlertMail(
+                    Mail::to($user->email)->queue(new NewLoginAlertMail(
                         $user->name,
                         $user->email,
                         $deviceName,
@@ -75,14 +73,33 @@ class AuthTokenService
                         $actionToken
                     ));
                 } catch (\Throwable $e) {
-                    Log::error('Mail Error (New Login Alert): ' . $e->getMessage());
+                    Log::error('Mail Queue Error (New Login Alert): ' . $e->getMessage());
                 }
-            };
-
-            if (app()->bound('events')) {
-                app()->terminating($sendMailCallback);
             } else {
-                register_shutdown_function($sendMailCallback);
+                $sendMailCallback = function () use ($user, $deviceName, $request, $actionToken) {
+                    if (function_exists('fastcgi_finish_request')) {
+                        @fastcgi_finish_request(); // Lepaskan koneksi HTTP ke browser seketika
+                    }
+                    try {
+                        @ini_set('default_socket_timeout', '3');
+                        Mail::to($user->email)->send(new NewLoginAlertMail(
+                            $user->name,
+                            $user->email,
+                            $deviceName,
+                            $request->ip() ?: 'IP tidak tersimpan',
+                            now()->translatedFormat('d M Y, H:i'),
+                            $actionToken
+                        ));
+                    } catch (\Throwable $e) {
+                        Log::error('Mail Error (New Login Alert): ' . $e->getMessage());
+                    }
+                };
+
+                if (app()->bound('events')) {
+                    app()->terminating($sendMailCallback);
+                } else {
+                    register_shutdown_function($sendMailCallback);
+                }
             }
         }
 

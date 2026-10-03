@@ -19,6 +19,7 @@ class CategorySeeder extends Seeder
             ['user_id' => null, 'name' => 'Bonus / Hadiah', 'type' => 'income', 'icon' => 'gift'],
             ['user_id' => null, 'name' => 'Investasi', 'type' => 'income', 'icon' => 'trending-up'],
             ['user_id' => null, 'name' => 'Pendapatan Lain-lain', 'type' => 'income', 'icon' => 'coins'],
+            ['user_id' => null, 'name' => 'Tabungan Impian', 'type' => 'income', 'icon' => 'piggy-bank'],
 
             // Expense
             ['user_id' => null, 'name' => 'Makanan & Minuman', 'type' => 'expense', 'icon' => 'utensils'],
@@ -29,6 +30,7 @@ class CategorySeeder extends Seeder
             ['user_id' => null, 'name' => 'Kesehatan', 'type' => 'expense', 'icon' => 'heart-pulse'],
             ['user_id' => null, 'name' => 'Pendidikan', 'type' => 'expense', 'icon' => 'graduation-cap'],
             ['user_id' => null, 'name' => 'Pengeluaran Lain-lain', 'type' => 'expense', 'icon' => 'more-horizontal'],
+            ['user_id' => null, 'name' => 'Tabungan Impian', 'type' => 'expense', 'icon' => 'piggy-bank'],
         ];
 
         foreach ($defaultCategories as $category) {

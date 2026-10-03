@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Resources\GoalResource;
 use App\Models\Account;
+use App\Models\Category;
 use App\Models\Goal;
 use App\Services\GamificationService;
 use Illuminate\Http\JsonResponse;
@@ -56,7 +57,21 @@ class GoalController extends Controller
             $actualDeposit = $remaining;
         }
 
-        $category = $request->user()->categories()->where('type', 'expense')->first();
+        $userId = $request->user()->id;
+        $category = Category::where(function ($query) use ($userId) {
+                $query->whereNull('user_id')->orWhere('user_id', $userId);
+            })
+            ->where('type', 'expense')
+            ->where(function ($q) {
+                $q->where('name', 'like', '%Tabungan%')
+                  ->orWhere('name', 'like', '%Investasi%')
+                  ->orWhere('name', 'like', '%Lain%');
+            })
+            ->first()
+            ?? Category::where(function ($query) use ($userId) {
+                $query->whereNull('user_id')->orWhere('user_id', $userId);
+            })->where('type', 'expense')->first();
+
         $categoryId = $category?->id;
 
         $insufficient = false;
@@ -153,7 +168,20 @@ class GoalController extends Controller
         $account = $request->user()->accounts()->findOrFail($validated['account_id']);
         $amount = (float) $validated['amount'];
 
-        $category = $request->user()->categories()->where('type', 'income')->first();
+        $category = Category::where(function ($query) use ($userId) {
+                $query->whereNull('user_id')->orWhere('user_id', $userId);
+            })
+            ->where('type', 'income')
+            ->where(function ($q) {
+                $q->where('name', 'like', '%Tabungan%')
+                  ->orWhere('name', 'like', '%Investasi%')
+                  ->orWhere('name', 'like', '%Lain%');
+            })
+            ->first()
+            ?? Category::where(function ($query) use ($userId) {
+                $query->whereNull('user_id')->orWhere('user_id', $userId);
+            })->where('type', 'income')->first();
+
         $categoryId = $category?->id;
 
         $insufficient = false;

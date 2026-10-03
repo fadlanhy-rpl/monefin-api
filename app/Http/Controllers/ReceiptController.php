@@ -22,47 +22,95 @@ class ReceiptController extends Controller
 
     /**
      * POST /api/receipts/scan
-     * Upload receipt image and extract structured data using user's BYOK Vision LLM.
+     * Upload 1 to 8 receipt images (for long multi-part receipts or multi-receipt bundles)
+     * and extract structured data using user's BYOK Vision LLM.
      */
     public function scan(Request $request): JsonResponse
     {
         @set_time_limit(120);
 
         $request->validate([
-            'image'        => ['required_without:image_base64', 'nullable', 'file', 'mimes:jpeg,png,jpg,webp', 'max:10240'],
-            'image_base64' => ['required_without:image', 'nullable', 'string'],
-            'mime_type'    => ['nullable', 'string', 'in:image/jpeg,image/png,image/webp,image/jpg'],
+            'images'          => ['nullable', 'array', 'min:1', 'max:8'],
+            'images.*'        => ['file', 'mimes:jpeg,png,jpg,webp', 'max:4096'],
+            'images_base64'   => ['nullable', 'array', 'min:1', 'max:8'],
+            'images_base64.*' => ['string'],
+            'image'           => ['required_without_all:image_base64,images,images_base64', 'nullable', 'file', 'mimes:jpeg,png,jpg,webp', 'max:4096'],
+            'image_base64'    => ['required_without_all:image,images,images_base64', 'nullable', 'string'],
+            'mime_type'       => ['nullable', 'string', 'in:image/jpeg,image/png,image/webp,image/jpg'],
         ], [
-            'image.mimes' => 'Format gambar harus JPG, PNG, atau WebP.',
-            'image.max'   => 'Ukuran gambar maksimal adalah 10MB.',
+            'images.max'     => 'Maksimal 8 foto struk dapat dipindai sekaligus.',
+            'images.*.mimes' => 'Format setiap gambar harus JPG, PNG, atau WebP.',
+            'images.*.max'   => 'Ukuran setiap gambar maksimal adalah 4MB.',
+            'image.mimes'    => 'Format gambar harus JPG, PNG, atau WebP.',
+            'image.max'      => 'Ukuran gambar maksimal adalah 4MB.',
         ]);
 
-        $mimeType = 'image/jpeg';
-        $base64   = '';
+        $imagesPayload = [];
 
-        if ($request->hasFile('image')) {
-            $file     = $request->file('image');
-            $mimeType = $file->getMimeType() ?: 'image/jpeg';
-            $base64   = base64_encode(file_get_contents($file->getRealPath()));
+        if ($request->hasFile('images')) {
+            foreach ($request->file('images') as $file) {
+                if (!$file || !$file->isValid()) {
+                    continue;
+                }
+                $imagesPayload[] = [
+                    'base64'    => base64_encode(file_get_contents($file->getRealPath())),
+                    'mime_type' => $file->getMimeType() ?: 'image/jpeg',
+                ];
+            }
+        } elseif ($request->filled('images_base64') && is_array($request->input('images_base64'))) {
+            foreach ($request->input('images_base64') as $raw) {
+                if (!is_string($raw) || $raw === '') {
+                    continue;
+                }
+                if (preg_match('/^data:(image\/[a-zA-Z0-9]+);base64,(.+)$/', $raw, $matches)) {
+                    $imagesPayload[] = [
+                        'base64'    => $matches[2],
+                        'mime_type' => $matches[1],
+                    ];
+                } else {
+                    $imagesPayload[] = [
+                        'base64'    => $raw,
+                        'mime_type' => $request->input('mime_type', 'image/jpeg'),
+                    ];
+                }
+            }
+        } elseif ($request->hasFile('image')) {
+            $file = $request->file('image');
+            $imagesPayload[] = [
+                'base64'    => base64_encode(file_get_contents($file->getRealPath())),
+                'mime_type' => $file->getMimeType() ?: 'image/jpeg',
+            ];
         } elseif ($request->filled('image_base64')) {
             $raw = $request->input('image_base64');
-            // Strip data:image/...;base64, prefix if present
             if (preg_match('/^data:(image\/[a-zA-Z0-9]+);base64,(.+)$/', $raw, $matches)) {
-                $mimeType = $matches[1];
-                $base64   = $matches[2];
+                $imagesPayload[] = [
+                    'base64'    => $matches[2],
+                    'mime_type' => $matches[1],
+                ];
             } else {
-                $base64   = $raw;
-                $mimeType = $request->input('mime_type', 'image/jpeg');
+                $imagesPayload[] = [
+                    'base64'    => $raw,
+                    'mime_type' => $request->input('mime_type', 'image/jpeg'),
+                ];
             }
         }
 
-        $result = $this->receiptService->scanReceipt($request->user(), $base64, $mimeType);
+        if (empty($imagesPayload)) {
+            return response()->json([
+                'error'   => true,
+                'code'    => 'NO_IMAGE',
+                'message' => 'Tidak ada foto struk yang diterima. Silakan unggah minimal 1 foto struk.',
+            ], 422);
+        }
+
+        $result = $this->receiptService->scanReceipt($request->user(), array_slice($imagesPayload, 0, 8));
 
         if (!$result['success']) {
             $status = match ($result['code'] ?? '') {
                 'NO_AI_KEY'            => 422,
                 'QUOTA_EXCEEDED'       => 402,
                 'VISION_NOT_SUPPORTED' => 422,
+                'IMAGE_TOO_LARGE'      => 422,
                 default                => 500,
             };
 
@@ -116,7 +164,7 @@ class ReceiptController extends Controller
             'description'         => ['required', 'string', 'max:500'],
             'transaction_date'    => ['required', 'date'],
             'save_receipt_image'  => ['nullable', 'boolean'],
-            'receipt_image'       => ['nullable', 'file', 'mimes:jpeg,png,jpg,webp', 'max:10240'],
+            'receipt_image'       => ['nullable', 'file', 'mimes:jpeg,png,jpg,webp', 'max:6144'],
             'save_mode'           => ['nullable', 'in:summary,itemized'],
             'merchant'            => ['nullable', 'string', 'max:255'],
             'subtotal'            => ['nullable', 'numeric'],
@@ -129,12 +177,14 @@ class ReceiptController extends Controller
             'items.*.total'       => ['nullable', 'numeric'],
             'items.*.category_id' => ['nullable', 'integer'],
             'split_by_category'   => ['nullable', 'boolean'],
+            'pages_count'         => ['nullable', 'integer', 'min:1', 'max:8'],
+            'scan_type'           => ['nullable', 'string', 'max:32'],
         ]);
 
         $saveReceiptImage = filter_var($request->input('save_receipt_image', false), FILTER_VALIDATE_BOOLEAN);
         $receiptImagePath = null;
 
-        // 1. Handle receipt image storage
+        // 1. Handle receipt image storage (up to 6MB when stitched from multiple photos)
         if ($saveReceiptImage && $request->hasFile('receipt_image')) {
             $file = $request->file('receipt_image');
             $ext  = $file->getClientOriginalExtension() ?: 'jpg';
@@ -160,6 +210,8 @@ class ReceiptController extends Controller
             'items_count'        => count($items),
             'items'              => $items,
             'saved_image'        => (bool) $receiptImagePath,
+            'pages_count'        => (int) ($validated['pages_count'] ?? 1),
+            'scan_type'          => $validated['scan_type'] ?? 'single',
         ];
 
         // 3. Option: Split into multiple transactions if split_by_category is true AND multiple distinct categories exist

@@ -4,6 +4,7 @@ use App\Http\Controllers\AccountController;
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\Api\AccountSecurityController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BootstrapController;
 use App\Http\Controllers\Api\GoogleAuthController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\ProfileController;
@@ -29,18 +30,25 @@ use Illuminate\Support\Facades\Route;
 // ─── Public Auth Routes (rate limited) ───────────────────────────────────────
 Route::middleware('throttle:60,1')->group(function () {
     Route::post('/auth/login',           [AuthController::class, 'login']);
-    Route::post('/auth/register',        [AuthController::class, 'register']);
     Route::post('/auth/verify-email',    [PasswordResetController::class, 'verifyEmail']);
-    Route::post('/auth/resend-otp',      [PasswordResetController::class, 'resendOtp']);
-    Route::post('/auth/forgot-password', [PasswordResetController::class, 'forgotPassword']);
-    Route::post('/auth/reset-password',  [PasswordResetController::class, 'resetPassword']);
     Route::post('/auth/verify-2fa',      [TwoFactorAuthController::class, 'verify2fa']);
     Route::post('/auth/secure-account',  [AccountSecurityController::class, 'secureAccount']);
 
+    // Proteksi spamming & email bombing (maksimal 10 request per menit per IP)
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('/auth/register',        [AuthController::class, 'register']);
+        Route::post('/auth/resend-otp',      [PasswordResetController::class, 'resendOtp']);
+        Route::post('/auth/forgot-password', [PasswordResetController::class, 'forgotPassword']);
+        Route::post('/auth/reset-password',  [PasswordResetController::class, 'resetPassword']);
+        Route::post('/register',             [AuthController::class, 'register']);
+    });
+
     // ─── Backward-compatible aliases (agar kode frontend lama tidak break) ────
     Route::post('/login',    [AuthController::class, 'login']);
-    Route::post('/register', [AuthController::class, 'register']);
 });
+
+// ─── Health Check ─────────────────────────────────────────────────────────────
+Route::get('/up', fn () => response()->json(['status' => 'UP', 'time' => now()->toISOString()]));
 
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 Route::get('/auth/google',          [GoogleAuthController::class, 'redirectToGoogle']);
@@ -82,9 +90,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // Transactions
     Route::apiResource('transactions', TransactionController::class);
 
-    // Receipt Scanning (Pindai Struk)
-    Route::post('/receipts/scan',    [ReceiptController::class, 'scan']);
-    Route::post('/receipts/confirm', [ReceiptController::class, 'confirm']);
+    // Receipt Scanning (Pindai Struk) — rate limited 10 req/menit per user
+    Route::middleware('throttle:10,1')->group(function () {
+        Route::post('/receipts/scan',    [ReceiptController::class, 'scan']);
+        Route::post('/receipts/confirm', [ReceiptController::class, 'confirm']);
+    });
 
     // Budgets
     Route::apiResource('budgets', BudgetController::class);
@@ -114,6 +124,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/trash',                      [TrashController::class, 'index']);
     Route::post('/trash/{type}/{id}/restore', [TrashController::class, 'restore']);
     Route::delete('/trash/{type}/{id}/force', [TrashController::class, 'forceDelete']);
+
+    // Bootstrap awal (1 boot untuk me+accounts+categories — hemat TTFB shared hosting)
+    Route::get('/bootstrap', [BootstrapController::class, '__invoke']);
 
     // Dashboard
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);

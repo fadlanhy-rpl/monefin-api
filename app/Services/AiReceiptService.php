@@ -17,14 +17,14 @@ class AiReceiptService
     ) {}
 
     /**
-     * Scan and parse receipt image using user's BYOK Vision LLM.
+     * Scan and parse 1 to 8 receipt images using user's BYOK Vision LLM.
      *
-     * @param  User   $user
-     * @param  string $imageBase64 Raw base64 encoded image (without data: prefix)
-     * @param  string $mimeType    e.g. 'image/jpeg', 'image/png', 'image/webp'
+     * @param  User         $user
+     * @param  array|string $imagesInput Array of ['base64' => string, 'mime_type' => string] or raw base64 string
+     * @param  string       $mimeType    Fallback mime type when $imagesInput is a string
      * @return array
      */
-    public function scanReceipt(User $user, string $imageBase64, string $mimeType = 'image/jpeg'): array
+    public function scanReceipt(User $user, array|string $imagesInput, string $mimeType = 'image/jpeg'): array
     {
         @set_time_limit(120);
 
@@ -63,17 +63,76 @@ class AiReceiptService
             ];
         }
 
+        // Normalize input into array of ['base64' => ..., 'mime_type' => ...] (1..8 images)
+        $images = [];
+        if (is_string($imagesInput)) {
+            if ($imagesInput !== '') {
+                $images[] = [
+                    'base64'    => $imagesInput,
+                    'mime_type' => $mimeType ?: 'image/jpeg',
+                ];
+            }
+        } else {
+            foreach (array_slice($imagesInput, 0, 8) as $entry) {
+                if (is_array($entry) && !empty($entry['base64'])) {
+                    $images[] = [
+                        'base64'    => (string) $entry['base64'],
+                        'mime_type' => !empty($entry['mime_type']) ? (string) $entry['mime_type'] : ($mimeType ?: 'image/jpeg'),
+                    ];
+                } elseif (is_string($entry) && $entry !== '') {
+                    $images[] = [
+                        'base64'    => $entry,
+                        'mime_type' => $mimeType ?: 'image/jpeg',
+                    ];
+                }
+            }
+        }
+
+        if (empty($images)) {
+            return [
+                'success' => false,
+                'code'    => 'NO_IMAGE',
+                'message' => 'Tidak ada foto struk yang dapat diproses.',
+            ];
+        }
+
         $userModel = $aiConfig['model'] ?? '';
         $baseUrl   = $aiConfig['base_url'] ?? null;
 
-        $prompt = $this->buildReceiptPrompt();
+        // Pagar ukuran payload: per gambar > ~2.8M char (≈2.1MB biner) atau total gabungan > 8M char (≈6MB biner)
+        // ditolak cepat agar PHP shared hosting tidak tersumbat sebelum memanggil provider.
+        $totalBase64Len = 0;
+        foreach ($images as $idx => $img) {
+            $len = strlen($img['base64']);
+            $totalBase64Len += $len;
+            if ($len > 2800000) {
+                $num = $idx + 1;
+                return [
+                    'success' => false,
+                    'code'    => 'IMAGE_TOO_LARGE',
+                    'message' => "Foto struk #{$num} terlalu besar untuk diproses cepat. Ulangi dengan foto yang sudah dikompresi otomatis oleh aplikasi.",
+                ];
+            }
+        }
+
+        if ($totalBase64Len > 8000000) {
+            return [
+                'success' => false,
+                'code'    => 'IMAGE_TOO_LARGE',
+                'message' => 'Total ukuran gabungan foto struk terlalu besar. Kurangi jumlah foto atau gunakan kompresi otomatis aplikasi.',
+            ];
+        }
+
+        $imageCount = count($images);
+        $prompt     = $this->buildReceiptPrompt($imageCount);
 
         try {
-            $rawJson = $this->callVisionProvider($provider, $apiKey, $userModel, $baseUrl, $prompt, $imageBase64, $mimeType);
+            $rawJson = $this->callVisionProvider($provider, $apiKey, $userModel, $baseUrl, $prompt, $images);
         } catch (\Throwable $e) {
             Log::error('AiReceiptService callVisionProvider error', [
-                'provider' => $provider,
-                'error'    => $e->getMessage(),
+                'provider'    => $provider,
+                'image_count' => $imageCount,
+                'error'       => $e->getMessage(),
             ]);
             return [
                 'success' => false,
@@ -92,7 +151,7 @@ class AiReceiptService
             ];
         }
 
-        $parsed = $this->parseAndValidateJson($rawJson);
+        $parsed = $this->parseAndValidateJson($rawJson, $imageCount);
 
         if (!$parsed) {
             return [
@@ -125,7 +184,9 @@ class AiReceiptService
     }
 
     /**
-     * Dispatch multimodal request to the appropriate vision provider.
+     * Dispatch multimodal request (with 1..8 images) to the appropriate vision provider.
+     *
+     * @param array<int, array{base64: string, mime_type: string}> $images
      */
     private function callVisionProvider(
         string $provider,
@@ -133,31 +194,32 @@ class AiReceiptService
         string $model,
         ?string $baseUrl,
         string $prompt,
-        string $imageBase64,
-        string $mimeType
+        array $images
     ): string {
-        $verifySSL = (bool) config('services.ai.verify_ssl', false);
+        $verifySSL  = (bool) config('services.ai.verify_ssl', false);
+        $imageCount = count($images);
+        $timeoutSec = $imageCount > 1 ? 40 : 28;
 
-        // 1. Google Gemini Native API — try v1beta/v1 with auto-upgrade to active 3.x models
+        // 1. Google Gemini Native API — model via single source of truth.
+        // Model hidup & custom user diteruskan apa adanya; hanya ID pensiun
+        // (2.0 / 1.5-*) yang di-upgrade. gemini-2.5-flash masih hidup (s.d. Okt 2026).
         if ($provider === 'gemini') {
-            $geminiModel = !empty($model) ? $model : 'gemini-3.6-flash';
-            // Automatically upgrade deprecated models (gemini-2.0-flash, gemini-2.5-flash, etc.)
-            if (in_array($geminiModel, ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']) || !str_contains($geminiModel, 'gemini')) {
-                $geminiModel = 'gemini-3.6-flash';
+            $geminiModel = AiProviderFactory::resolveGeminiModel($model);
+
+            $parts = [['text' => $prompt]];
+            foreach ($images as $img) {
+                $parts[] = [
+                    'inline_data' => [
+                        'mime_type' => $img['mime_type'],
+                        'data'      => $img['base64'],
+                    ],
+                ];
             }
 
             $nativePayload = [
                 'contents' => [
                     [
-                        'parts' => [
-                            ['text' => $prompt],
-                            [
-                                'inline_data' => [
-                                    'mime_type' => $mimeType,
-                                    'data'      => $imageBase64,
-                                ],
-                            ],
-                        ],
+                        'parts' => $parts,
                     ],
                 ],
                 'generationConfig' => [
@@ -166,17 +228,18 @@ class AiReceiptService
                 ],
             ];
 
-            // Candidate models: requested model first, then fallback to gemini-3.6-flash and gemini-flash-latest
-            // Candidate models: requested model first, then fallback to gemini-flash-latest, 3.6-flash, and 3.5-flash
-            $candidateModels = array_unique([$geminiModel, 'gemini-flash-latest', 'gemini-3.6-flash', 'gemini-3.5-flash']);
+            // Kandidat: model user + SATU fallback hidup. Fail-fast: pindah versi API
+            // (v1beta→v1) hanya saat 404; error lain (429/503/400) langsung ke model berikut.
+            $candidateModels = array_values(array_unique([$geminiModel, AiProviderFactory::GEMINI_FALLBACK_MODEL]));
             $apiVersions     = ['v1beta', 'v1'];
             $nativeRes       = null;
+            $nativeStartedAt = microtime(true);
 
             foreach ($candidateModels as $currentModel) {
                 foreach ($apiVersions as $apiVersion) {
                     $endpoint = "https://generativelanguage.googleapis.com/{$apiVersion}/models/{$currentModel}:generateContent?key={$apiKey}";
                     try {
-                        $attempt = Http::timeout(45)
+                        $attempt = Http::timeout($timeoutSec)
                             ->withOptions(['verify' => $verifySSL])
                             ->post($endpoint, $nativePayload);
                     } catch (\Throwable $e) {
@@ -185,16 +248,25 @@ class AiReceiptService
                     }
 
                     if ($attempt->successful()) {
+                        Log::info('Gemini native receipt scan success', [
+                            'model'       => $currentModel,
+                            'version'     => $apiVersion,
+                            'image_count' => $imageCount,
+                            'latency_ms'  => (int) ((microtime(true) - $nativeStartedAt) * 1000),
+                        ]);
                         $nativeRes = $attempt;
                         break 2;
                     }
 
-                    // If 503 (high demand), 404 (model not found), or other error, try next candidate model
-                    Log::warning("Gemini {$apiVersion} model {$currentModel} returned {$attempt->status()}, trying fallback model...", [
-                        'status' => $attempt->status(),
+                    $status = $attempt->status();
+                    Log::warning("Gemini {$apiVersion} model {$currentModel} returned {$status}", [
+                        'status' => $status,
                         'body'   => substr($attempt->body(), 0, 200),
                     ]);
                     $nativeRes = $attempt;
+                    if ($status !== 404) {
+                        break; // Bukan soal versi API — langsung coba model fallback
+                    }
                 }
             }
 
@@ -223,35 +295,38 @@ class AiReceiptService
 
         // 2. Anthropic Claude Provider
         if ($provider === 'claude') {
-            $claudeModel = !empty($model) ? $model : 'claude-3-5-sonnet-20241022';
+            $claudeModel = !empty($model) ? $model : 'claude-sonnet-5';
             $endpoint    = 'https://api.anthropic.com/v1/messages';
 
+            $claudeContent = [];
+            foreach ($images as $img) {
+                $claudeContent[] = [
+                    'type'   => 'image',
+                    'source' => [
+                        'type'       => 'base64',
+                        'media_type' => $img['mime_type'],
+                        'data'       => $img['base64'],
+                    ],
+                ];
+            }
+            $claudeContent[] = [
+                'type' => 'text',
+                'text' => $prompt,
+            ];
+
             $payload = [
-                'model'      => $claudeModel,
-                'max_tokens' => 4096,
+                'model'       => $claudeModel,
+                'max_tokens'  => 4096,
                 'temperature' => 0.1,
-                'messages'   => [
+                'messages'    => [
                     [
                         'role'    => 'user',
-                        'content' => [
-                            [
-                                'type'   => 'image',
-                                'source' => [
-                                    'type'       => 'base64',
-                                    'media_type' => $mimeType,
-                                    'data'       => $imageBase64,
-                                ],
-                            ],
-                            [
-                                'type' => 'text',
-                                'text' => $prompt,
-                            ],
-                        ],
+                        'content' => $claudeContent,
                     ],
                 ],
             ];
 
-            $res = Http::timeout(60)
+            $res = Http::timeout($timeoutSec)
                 ->withOptions(['verify' => $verifySSL])
                 ->withHeaders([
                     'x-api-key'         => $apiKey,
@@ -272,23 +347,40 @@ class AiReceiptService
 
         // 3. OpenAI or OpenAI-Compatible Vision (GPT-4o, Groq, OpenRouter, Custom)
         $visionModel = $model;
+        $openAiImages = $images;
+
         if ($provider === 'openai') {
-            $visionModel = in_array($model, ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo']) ? $model : 'gpt-4o-mini';
+            $live = ['gpt-5', 'gpt-5-mini', 'gpt-5.6-terra', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
+            $visionModel = in_array($model, $live, true) ? $model : 'gpt-4o-mini';
             $baseEndpoint = 'https://api.openai.com/v1';
         } elseif ($provider === 'groq') {
-            $visionModel = 'llama-3.2-11b-vision-preview';
+            $visionModel = 'meta-llama/llama-4-scout-17b-16e-instruct';
             $baseEndpoint = 'https://api.groq.com/openai/v1';
+            // Groq Llama-4 Scout supports max 5 images per request
+            $openAiImages = array_slice($images, 0, 5);
         } elseif ($provider === 'gemini') {
-            $visionModel = !empty($model) ? $model : 'gemini-3.6-flash';
-            if (in_array($visionModel, ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']) || !str_contains($visionModel, 'gemini')) {
-                $visionModel = 'gemini-3.6-flash';
-            }
+            $visionModel = AiProviderFactory::resolveGeminiModel($model);
             $baseEndpoint = 'https://generativelanguage.googleapis.com/v1beta/openai';
         } else {
             $baseEndpoint = rtrim($baseUrl ?: 'https://api.openai.com/v1', '/');
             if (str_ends_with($baseEndpoint, '/chat/completions')) {
                 $baseEndpoint = substr($baseEndpoint, 0, -strlen('/chat/completions'));
             }
+        }
+
+        $openAiContent = [
+            [
+                'type' => 'text',
+                'text' => $prompt,
+            ],
+        ];
+        foreach ($openAiImages as $img) {
+            $openAiContent[] = [
+                'type'      => 'image_url',
+                'image_url' => [
+                    'url' => "data:{$img['mime_type']};base64,{$img['base64']}",
+                ],
+            ];
         }
 
         $payload = [
@@ -298,24 +390,13 @@ class AiReceiptService
             'messages'    => [
                 [
                     'role'    => 'user',
-                    'content' => [
-                        [
-                            'type' => 'text',
-                            'text' => $prompt,
-                        ],
-                        [
-                            'type'      => 'image_url',
-                            'image_url' => [
-                                'url' => "data:{$mimeType};base64,{$imageBase64}",
-                            ],
-                        ],
-                    ],
+                    'content' => $openAiContent,
                 ],
             ],
         ];
 
-        $postVision = function (bool $verify) use ($baseEndpoint, $apiKey, $payload) {
-            return Http::timeout(55)  // 55s: toleransi model gratis OpenRouter yang lambat
+        $postVision = function (bool $verify) use ($baseEndpoint, $apiKey, $payload, $timeoutSec) {
+            return Http::timeout($timeoutSec)
                 ->withOptions(['verify' => $verify])
                 ->withHeaders([
                     'Authorization' => "Bearer {$apiKey}",
@@ -326,15 +407,16 @@ class AiReceiptService
                 ->post("{$baseEndpoint}/chat/completions", $payload);
         };
 
+        $visionStartedAt = microtime(true);
         try {
             $res = $postVision($verifySSL);
         } catch (\Throwable $e) {
             if (str_contains($e->getMessage(), 'cURL error 28') || str_contains($e->getMessage(), 'timed out')) {
                 throw new \RuntimeException(
-                    "Model AI '{$visionModel}' tidak merespons (timeout 55 detik). " .
-                    "Antrean server OpenRouter sedang penuh atau model tidak aktif. " .
-                    "Rekomendasi: Gunakan Google Gemini (gratis, paling cepat & stabil) dengan mengganti Provider ke 'Google Gemini' " .
-                    "di Pengaturan → AI Chatbot. Atau coba model OpenRouter lain: google/gemini-2.0-flash-exp:free."
+                    "Model AI '{$visionModel}' tidak merespons (timeout {$timeoutSec} detik). " .
+                    "Antrean server sedang penuh atau model tidak aktif. " .
+                    "Rekomendasi: gunakan Google Gemini langsung (gratis, paling cepat & stabil) dengan mengganti Provider ke 'Google Gemini' " .
+                    "di Pengaturan → AI Chatbot."
                 );
             }
 
@@ -344,8 +426,8 @@ class AiReceiptService
                 } catch (\Throwable $retryEx) {
                     if (str_contains($retryEx->getMessage(), 'cURL error 28') || str_contains($retryEx->getMessage(), 'timed out')) {
                         throw new \RuntimeException(
-                            "Model AI '{$visionModel}' tidak merespons (timeout 55 detik). " .
-                            "Antrean server OpenRouter sedang penuh. Ganti ke Google Gemini di Pengaturan → AI Chatbot."
+                            "Model AI '{$visionModel}' tidak merespons (timeout {$timeoutSec} detik). " .
+                            "Antrean server sedang penuh. Ganti ke Google Gemini di Pengaturan → AI Chatbot."
                         );
                     }
                     throw $retryEx;
@@ -355,15 +437,14 @@ class AiReceiptService
             }
         }
 
-        // Automatic retry once on HTTP 429 (Transient rate limit / burst limit backoff)
+        // Satu retry SEGERA (tanpa sleep — shared hosting) untuk 429 transient.
         if ($res->status() === 429) {
-            Log::info('AiReceiptService rate-limited (429), retrying after 2s backoff...', [
+            Log::info('AiReceiptService rate-limited (429), retrying once immediately...', [
                 'provider' => $provider,
                 'model'    => $visionModel,
             ]);
-            sleep(2);
             try {
-                $res = $postVision(false);
+                $res = $postVision($verifySSL);
             } catch (\Throwable) {
                 // Keep original 429 response if retry throws
             }
@@ -408,35 +489,60 @@ class AiReceiptService
 
         }
 
+        Log::info('AiReceiptService vision scan success', [
+            'provider'    => $provider,
+            'model'       => $visionModel,
+            'image_count' => $imageCount,
+            'latency_ms'  => (int) ((microtime(true) - $visionStartedAt) * 1000),
+        ]);
+
         return $res->json()['choices'][0]['message']['content'] ?? '';
     }
 
     /**
-     * Build strict, comprehensive system prompt for Indonesian receipt extraction.
+     * Build strict, comprehensive system prompt for Indonesian receipt extraction
+     * supporting both single-image and multi-image (long receipt or multi-receipt bundle).
      */
-    private function buildReceiptPrompt(): string
+    private function buildReceiptPrompt(int $imageCount = 1): string
     {
         $today = Carbon::now()->toDateString();
 
-        return "Kamu adalah sistem Optical Document Extraction khusus struk belanja untuk aplikasi keuangan MoneFin (Indonesia).
-Tugasmu: Ekstrak seluruh informasi finansial dari foto struk belanja berikut dengan presisi tinggi.
+        $multiImageInstruction = '';
+        if ($imageCount > 1) {
+            $multiImageInstruction = "\nKONTEKS MULTI-FOTO ({$imageCount} GAMBAR DITERIMA SECARA BERURUTAN DARI FOTO #1 SAMPAI FOTO #{$imageCount}):
+Analisis terlebih dahulu hubungan antar {$imageCount} foto struk ini:
+- KASUS A: STRUK PANJANG BERKELANJUTAN ('scan_type': 'long_receipt')
+  Jika foto #1 sampai #{$imageCount} adalah 1 struk belanja fisik yang panjang dan difoto bertahap dari atas ke bawah:
+  1. Lakukan Cross-Image Overlap Deduplication: jika ada 1-3 baris item yang sama persis di batas bawah Foto ke-N yang terfoto ulang di batas atas Foto ke-(N+1), HANYA catat satu kali (jangan diduplikasi). Namun jika barang yang sama memang dibeli berulang kali pada posisi struk yang berbeda, tetap catat sesuai struk.
+  2. Ambil nilai 'subtotal', 'tax', 'discount', dan 'total' dari bagian paling bawah struk (Grand Total akhir), BUKAN menjumlahkan subtotal parsial.
+- KASUS B: GABUNGAN BEBERAPA STRUK BERBEDA ('scan_type': 'multi_receipt')
+  Jika foto-foto tersebut adalah beberapa struk belanja berbeda yang ingin digabung dalam 1 pencatatan transaksi:
+  1. Gabungkan seluruh daftar 'items' dari semua struk secara berurutan.
+  2. Jumlahkan nilai 'subtotal', 'tax', 'discount', dan 'total' dari seluruh struk tersebut.
+  3. Untuk 'merchant', sebutkan gabungan nama toko secara ringkas (misal: 'Indomaret & Alfamart' atau 'Toko A + 2 Struk Lainnya').\n";
+        }
 
+        $defaultScanType = $imageCount > 1 ? 'long_receipt' : 'single';
+
+        return "Kamu adalah sistem Optical Document Extraction khusus struk belanja untuk aplikasi keuangan MoneFin (Indonesia).
+Tugasmu: Ekstrak seluruh informasi finansial dari foto struk belanja berikut dengan presisi tinggi.{$multiImageInstruction}
 ATURAN EKSTRAKSI:
 1. 'merchant': Nama toko/merchant/restoran (contoh: 'Indomaret', 'Alfamart', 'Superindo', 'Kopi Kenangan', 'SPBU Pertamina', 'McDonalds'). Jika tidak ada, tulis 'Toko Belanja'.
 2. 'date': Tanggal transaksi dalam format 'YYYY-MM-DD'. Tahun saat ini adalah 2026 (hari ini: '{$today}'). Jika tanggal di struk menampilkan 2 digit tahun seperti 'DD/MM/YY' atau 'DD-MM-YY' (misal: '14/09/16' atau '14/09/26'), pastikan tahun yang dihasilkan adalah 2026 ('2026-09-14'), BUKAN 2016. Jika tanggal tidak terbaca, gunakan tanggal hari ini: '{$today}'.
 3. 'currency': Mata uang (umumnya 'IDR').
-4. 'items': Daftar item barang/menu yang dibeli. Setiap item memiliki:
+4. 'scan_type': Jenis pemindaian, bernilai 'single' (jika 1 foto), 'long_receipt' (jika beberapa foto dari 1 struk panjang yang sama), atau 'multi_receipt' (jika beberapa foto dari struk-struk berbeda yang digabung).
+5. 'items': Daftar item barang/menu yang dibeli. Setiap item memiliki:
    - 'name': Nama barang (singkatan struk mohon dirapikan bila mudah dikenali, misal 'ULTRA TPK 250ML' -> 'Ultra Milk 250ml').
    - 'qty': Jumlah kuantitas (angka integer/float, default 1).
    - 'price': Harga satuan dalam angka tanpa titik/koma (misal 15000).
    - 'total': Total harga item tersebut (qty * price).
    - 'category': Kategori perkiraan untuk item tersebut (contoh: 'Makanan & Minuman', 'Belanja & Kebutuhan', 'Kesehatan', 'Transportasi', 'Tagihan & Utilitas', 'Hiburan', 'Lain-lain').
-5. 'subtotal': Total belanja sebelum pajak dan diskon.
-6. 'tax': Nilai PPN/pajak jika ada (angka murni, default 0).
-7. 'discount': Nilai diskon/potongan harga jika ada (angka murni positif, default 0).
-8. 'total': TOTAL AKHIR yang benar-benar dibayarkan oleh pelanggan (setelah pajak dan diskon).
-9. 'suggested_category': Kategori utama keseluruhan transaksi (pilih yang paling cocok: 'Makanan & Minuman', 'Belanja & Kebutuhan', 'Transportasi', 'Tagihan & Utilitas', 'Kesehatan', 'Hiburan', 'Lain-lain').
-10. 'confidence': Estimasi kepercayaan pembacaan struk dari 0.0 sampai 1.0.
+6. 'subtotal': Total belanja sebelum pajak dan diskon.
+7. 'tax': Nilai PPN/pajak jika ada (angka murni, default 0).
+8. 'discount': Nilai diskon/potongan harga jika ada (angka murni positif, default 0).
+9. 'total': TOTAL AKHIR yang benar-benar dibayarkan oleh pelanggan (setelah pajak dan diskon).
+10. 'suggested_category': Kategori utama keseluruhan transaksi (pilih yang paling cocok: 'Makanan & Minuman', 'Belanja & Kebutuhan', 'Transportasi', 'Tagihan & Utilitas', 'Kesehatan', 'Hiburan', 'Lain-lain').
+11. 'confidence': Estimasi kepercayaan pembacaan struk dari 0.0 sampai 1.0.
 
 PENTING:
 - Kembalikan HANYA format JSON valid tanpa tag markdown, tanpa backtick, dan tanpa komentar teks apa pun di luar JSON.
@@ -445,6 +551,7 @@ Contoh format output persis:
   \"merchant\": \"Indomaret Diponegoro\",
   \"date\": \"2026-09-23\",
   \"currency\": \"IDR\",
+  \"scan_type\": \"{$defaultScanType}\",
   \"items\": [
     {
       \"name\": \"Ultra Milk Full Cream 250ml\",
@@ -466,7 +573,7 @@ Contoh format output persis:
     /**
      * Clean, parse, and validate JSON from AI response.
      */
-    private function parseAndValidateJson(string $raw): ?array
+    private function parseAndValidateJson(string $raw, int $imageCount = 1): ?array
     {
         // Strip <think>...</think> tags if reasoning model is used
         $clean = preg_replace('/<think>.*?<\/think>/s', '', $raw);
@@ -528,6 +635,15 @@ Contoh format output persis:
             }
         }
 
+        // If total is still 0 and we have items, sum item totals
+        if ($total <= 0 && !empty($items)) {
+            $itemsSum = array_reduce($items, fn($carry, $it) => $carry + (float) ($it['total'] ?? 0), 0.0);
+            if ($itemsSum > 0) {
+                $subtotal = $subtotal > 0 ? $subtotal : $itemsSum;
+                $total    = max(0, $subtotal + $tax - $discount);
+            }
+        }
+
         // Fallback date
         $date = trim($data['date'] ?? '');
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
@@ -541,10 +657,21 @@ Contoh format output persis:
             }
         }
 
+        $rawScanType = strtolower(trim((string) ($data['scan_type'] ?? '')));
+        if ($imageCount <= 1) {
+            $scanType = 'single';
+        } elseif (in_array($rawScanType, ['long_receipt', 'multi_receipt'], true)) {
+            $scanType = $rawScanType;
+        } else {
+            $scanType = 'long_receipt';
+        }
+
         return [
             'merchant'           => trim($data['merchant'] ?? 'Toko Belanja') ?: 'Toko Belanja',
             'date'               => $date,
             'currency'           => $data['currency'] ?? 'IDR',
+            'scan_type'          => $scanType,
+            'pages_count'        => $imageCount,
             'items'              => $items,
             'subtotal'           => max(0, $subtotal),
             'tax'                => max(0, $tax),
