@@ -5,6 +5,18 @@
 
     RewriteEngine On
 
+    # ─── Anti CVE-2024-4577 & CGI Argument Injection Protection ─────────────
+    # Blokir upaya eksploitasi parameter CGI via query string (%ad, %2d, -d, auto_prepend_file, dll)
+    RewriteCond %{QUERY_STRING} (%ad|%2d|%AD|%2D|-)[dD] [NC,OR]
+    RewriteCond %{QUERY_STRING} (auto_prepend_file|auto_append_file|allow_url_include) [NC,OR]
+    RewriteCond %{QUERY_STRING} (php://input|php://filter) [NC,OR]
+    RewriteCond %{QUERY_STRING} (cgi\.force_redirect|disable_functions) [NC]
+    RewriteRule .* - [F,L]
+
+    # ─── Block Hidden Files & Dotfiles (.env, .git, .user.ini) ─────────────
+    RewriteCond %{REQUEST_URI} (^|/)\.(?!well-known) [NC]
+    RewriteRule .* - [F,L]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

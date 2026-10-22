@@ -187,7 +187,10 @@ class ReceiptController extends Controller
         // 1. Handle receipt image storage (up to 6MB when stitched from multiple photos)
         if ($saveReceiptImage && $request->hasFile('receipt_image')) {
             $file = $request->file('receipt_image');
-            $ext  = $file->getClientOriginalExtension() ?: 'jpg';
+            $ext  = strtolower($file->extension() ?: 'jpg');
+            if (!in_array($ext, ['jpg', 'jpeg', 'png', 'webp'], true)) {
+                $ext = 'jpg';
+            }
             $filename = 'rcpt_' . $userId . '_' . time() . '_' . Str::random(12) . '.' . $ext;
 
             // Store in public/uploads/receipts/{userId}/ via uploads disk (no symlink required on shared hosting)

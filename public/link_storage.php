@@ -1,5 +1,14 @@
 <?php
 // One-click storage link creator for SkipperHost / cPanel
+// Security: Batasi akses publik agar tidak membocorkan path server ke bot/scanner
+$secretKey = getenv('APP_KEY') ?: 'monefin_storage_setup_key';
+$providedKey = $_GET['key'] ?? '';
+
+if (php_sapi_name() !== 'cli' && (empty($providedKey) || !hash_equals($secretKey, $providedKey))) {
+    http_response_code(403);
+    exit('Forbidden');
+}
+
 header('Content-Type: text/plain');
 
 $target = dirname(__DIR__) . '/storage/app/public';
