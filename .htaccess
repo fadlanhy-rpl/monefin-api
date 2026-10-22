@@ -1,10 +1,41 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # Block access to hidden files/folders (such as .env, .git)
-    RewriteRule ^\.(.*)$ - [F,L]
+    # ─── 1. Anti CVE-2024-4577 & CGI Argument Injection ─────────────────────
+    RewriteCond %{QUERY_STRING} (%ad|%2d|%AD|%2D|-)[dD] [NC,OR]
+    RewriteCond %{QUERY_STRING} (auto_prepend_file|auto_append_file|allow_url_include) [NC,OR]
+    RewriteCond %{QUERY_STRING} (php://input|php://filter) [NC,OR]
+    RewriteCond %{QUERY_STRING} (cgi\.force_redirect|disable_functions) [NC]
+    RewriteRule .* - [F,L]
 
-    # Route requests to public/ folder
+    # ─── 2. Block Hidden Files (.env, .git) except .well-known (SSL certs) ──
+    RewriteCond %{REQUEST_URI} (^|/)\.(?!well-known) [NC]
+    RewriteRule .* - [F,L]
+
+    # ─── 3. Block Sensitive Root Files & Source Code Leakage ────────────────
+    # Mencegah unduhan composer.json, artisan, log, kode controller di luar public
+    RewriteCond %{REQUEST_URI} (^|/)(composer\.(json|lock)|package\.json|artisan|\.env.*|phpunit\.xml)$ [NC,OR]
+    RewriteCond %{REQUEST_URI} (^|/)(app|bootstrap|config|database|resources|routes|storage|tests)/ [NC]
+    RewriteRule .* - [F,L]
+
+    # ─── 4. Route Requests to public/ folder cleanly ────────────────────────
+    RewriteCond %{REQUEST_URI} !^/public/
     RewriteRule ^$ public/ [L]
-    RewriteRule (.*) public/$1 [L]
+
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/$1 [L]
 </IfModule>
+
+# ─── 5. Defense-in-Depth: Hard Block for .env & Sensitive Files ─────────────
+<FilesMatch "(?i)^(\.env|composer\.(json|lock)|artisan)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order Deny,Allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Matikan directory browsing agar penyerang tidak bisa melihat isi folder
+Options -Indexes -MultiViews
